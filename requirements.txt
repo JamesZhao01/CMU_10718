@@ -1,0 +1,5 @@
+matplotlib
+black
+numpy
+kaggle
+ipykernel
