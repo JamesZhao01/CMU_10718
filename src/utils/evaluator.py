@@ -93,11 +93,12 @@ class User:
         """
         
         # Randomly select indices to mask (subsample)
-        selected_indices = np.random.choice(len(self.watch_history), size=self.k, replace=False)
+        mask = np.random.choice(len(self.watch_history), size=self.k, replace=False)
+        preserved_data = np.setdiff1d(np.arange(len(self.watch_history)), mask)
 
         # Subsample both arrays using the selected indices
-        self.masked_watch_history = self.watch_history[selected_indices]
-        self.masked_rating_history = self.rating_history[selected_indices]
+        self.masked_watch_history = self.watch_history[preserved_data]
+        self.masked_rating_history = self.rating_history[preserved_data]
 
     def get_history(self):
         """
