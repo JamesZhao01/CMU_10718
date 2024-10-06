@@ -5,3 +5,4 @@ kaggle
 ipykernel
 pandas
 scikit-metrics
+scikit-learn
