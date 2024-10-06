@@ -1,8 +1,13 @@
 import argparse
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+
+from src.utils import evaluator
 
 def get_data():
-    pass
-
+    EVAL = evaluator.Evaluator(path=args.data_path)
+    import pdb; pdb.set_trace()
 def sort_data():
     pass    
 
@@ -17,7 +22,7 @@ def save_embedder():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, default=None)
+    parser.add_argument("--data_path", type=str, default='/data/taeyoun_kim/jailbreak_work/attack_mlip/big_attack/data')
     parser.add_argument("--embedder_name", type=str, default=None)
     args = parser.parse_args()
     print(args)
