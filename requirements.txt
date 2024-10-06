@@ -4,3 +4,4 @@ numpy
 kaggle
 ipykernel
 pandas
+scikit-metrics
