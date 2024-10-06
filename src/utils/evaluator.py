@@ -95,7 +95,7 @@ class User:
         # Randomly select indices to mask (subsample)
         mask = np.random.choice(len(self.watch_history), size=self.k, replace=False)
         preserved_data = np.setdiff1d(np.arange(len(self.watch_history)), mask)
-
+        
         # Subsample both arrays using the selected indices
         self.masked_watch_history = self.watch_history[preserved_data]
         self.masked_rating_history = self.rating_history[preserved_data]
@@ -120,6 +120,7 @@ class User:
 
         one_hot_encoding = np.zeros(MAX_ANIME_COUNT, dtype=float)
         # Populate the one-hot list with ratings at indices corresponding to anime_id
+
         one_hot_encoding[self.masked_watch_history] = self.masked_rating_history
         return one_hot_encoding
         
@@ -184,7 +185,7 @@ class Evaluator:
                   rating = rating,
                   membership_count = membership_count
                   )
-            self.anime_mapping[anime_id-1] = anime
+            self.anime_mapping[anime_df['anime_id']-1] = anime
 
         # Gets all the user watch history
         for user_id, user_df in self.users.groupby('user_id'):
@@ -201,33 +202,29 @@ class Evaluator:
 
             user = User(user_id, anime_list, rating_list, self.k)
 
+            # Filter/Preprocess the data
+            filtered_watch_history:list[int] = []
+            filtered_rating_history:list[int] = []
+            for i,anime_id in enumerate(user.watch_history):
+                # Filter out NSFW
+                current_anime = self.anime_mapping[anime_id]
+                if Genre.Hentai not in current_anime.genres:
+                    filtered_watch_history.append(anime_id)
+                    filtered_rating_history.append(user.rating_history[i])
+
+                    if normalize_unrated and user.rating_history[i] == -1:
+                        filtered_rating_history[-1] = self.anime_mapping[anime_id].rating
+
+            user.watch_history = np.array(filtered_watch_history)
+            user.rating_history = np.array(filtered_rating_history)
+
             # Filters out users that have too little watch history.
-            enough_watch_history = np.count_nonzero(anime_list) >= self.threshold_watch_history
+            enough_watch_history = np.count_nonzero(user.watch_history) >= self.threshold_watch_history
             if enough_watch_history:
                 self.user_mapping[user.id] = user
                 
 
         self.idxs = list(self.user_mapping.keys())
-
-        # Filter/Preprocess the data
-        for idx in self.user_mapping.keys():
-            user:User = self.user_mapping[idx]
-            filtered_watch_history:list[int] = []
-            filtered_rating_history:list[int] = []
-
-            for i,anime_id in enumerate(user.watch_history):
-
-                # Filter out NSFW
-                if Genre.Hentai not in self.anime_mapping[anime_id].genres:
-                    filtered_watch_history.append(anime_id)
-                    filtered_rating_history.append(user.rating_history[i])
-
-                # Set unrated, watched shows to the average rating of the anime
-                if normalize_unrated and filtered_rating_history[-1] == -1:
-                    filtered_rating_history[-1] = self.anime_mapping[anime_id].rating
-
-            user.watch_history = np.array(filtered_watch_history)
-            user.rating_history = np.array(filtered_rating_history)
         
         # Split the data into train/test/val
         train_size = int(0.8 * len(self.idxs))
