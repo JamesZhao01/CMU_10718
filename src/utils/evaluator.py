@@ -294,13 +294,17 @@ class Evaluator:
         """
         
         user_masked_watch_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
+        user_watch_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
         for i,id in enumerate(self.test_ids):
             user = self.user_mapping[id]
             user.generate_masked_history()
             user_masked_watch_history[i] = user.get_masked_history()
+            user_watch_history[i] = user.get_history()
+
+        user_heldout_watch_history = user_watch_history - user_masked_watch_history
 
         self.start_time = time.time()
-        return user_masked_watch_history, self.k
+        return user_masked_watch_history, user_heldout_watch_history, self.k
     
     
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
