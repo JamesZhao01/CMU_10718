@@ -6,3 +6,4 @@ ipykernel
 pandas
 scikit-metrics
 scikit-learn
+scipy
