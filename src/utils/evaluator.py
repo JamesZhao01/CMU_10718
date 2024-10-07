@@ -7,8 +7,6 @@ import time
 from sklearn.metrics import ndcg_score
 import math
 
-MAX_ANIME_COUNT = 12_294
-
 
 class Type(Enum):
     TV = 1
@@ -92,7 +90,9 @@ class User:
         id: int,
         watch_history: np.ndarray[int],
         rating_history: np.ndarray[float],
-        k,
+        imputed_rating_history: np.ndarray[float],
+        k: int,
+        max_anime_count: int,
     ):
         self.id: int = id
         self.watch_history: np.ndarray[int] = watch_history
@@ -100,11 +100,12 @@ class User:
         # they will be a float.
         # self.rating_history:list[float] = rating_history
         self.rating_history: np.ndarray[float] = rating_history
-        self.imputd_rating_history = np.array([])
+        self.imputed_rating_history: np.ndarray[float] = imputed_rating_history
         self.k = k
         self.masked_watch_history: np.ndarray[int] = np.array([])
         self.masked_rating_history: np.ndarray[float] = np.array([])
         self.masked_imputed_history: np.ndarray[float] = np.array([])
+        self.max_anime_count: int = max_anime_count
 
     def generate_masked_history(self):
         """
@@ -118,6 +119,7 @@ class User:
                 len(self.watch_history), size=self.k, replace=False
             )
             preserved_data = np.setdiff1d(np.arange(len(self.watch_history)), self.mask)
+            self.preserved_canonical_ids = self.watch_history[preserved_data]
 
             # Subsample both arrays using the selected indices
             self.masked_watch_history = self.watch_history[preserved_data]
@@ -131,13 +133,13 @@ class User:
         (Note that index 0 is always just 0 since anime id starts with 1).
         """
 
-        one_hot_encoding = np.zeros(MAX_ANIME_COUNT, dtype=float)
+        one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         # Populate the array with ratings at indices corresponding to anime_id
         one_hot_encoding[self.watch_history] = self.rating_history
         return one_hot_encoding
 
     def get_imputed_history(self):
-        one_hot_encoding = np.zeros(MAX_ANIME_COUNT, dtype=float)
+        one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         # Populate the array with ratings at indices corresponding to anime_id
         one_hot_encoding[self.watch_history] = self.imputed_rating_history
         return one_hot_encoding
@@ -148,14 +150,14 @@ class User:
         This assumes that generate_masked_history has been called earlier.
         """
 
-        one_hot_encoding = np.zeros(MAX_ANIME_COUNT, dtype=float)
+        one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         # Populate the one-hot list with ratings at indices corresponding to anime_id
 
         one_hot_encoding[self.masked_watch_history] = self.masked_rating_history
         return one_hot_encoding
 
     def get_imputed_masked_history(self):
-        one_hot_encoding = np.zeros(MAX_ANIME_COUNT, dtype=float)
+        one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         one_hot_encoding[self.masked_watch_history] = self.masked_imputed_history
         return one_hot_encoding
 
@@ -168,15 +170,16 @@ class Evaluator:
         self.threshold_watch_history = 20
         self.user_mapping = {}
         self.anime_mapping = {}
-        self.canonical_id_to_anime_id = {}
+        self.canonical_anime_mapping = {}
         self.anime_id_to_canonical_id = {}
+        self.canonical_id_to_anime_id = {}
         self.user_ids = []
         self.current_idx = 0
         self.normalize_unrated = normalize_unrated
 
         print(f"{normalize_unrated=}")
         np.random.seed(42)
-
+        t = 0
         # Gets all the information about the animes
         for anime_id, anime_df in self.animes.iterrows():
             genres = []
@@ -216,7 +219,7 @@ class Evaluator:
                 membership_count = anime_df["members"]
 
             anime = Anime(
-                id=anime_df["anime_id"] - 1,
+                id=t,
                 name=anime_df["name"],
                 genres=genres,
                 type=type,
@@ -224,56 +227,55 @@ class Evaluator:
                 rating=rating,
                 membership_count=membership_count,
             )
-            self.anime_mapping[anime_df["anime_id"] - 1] = anime
-        self.anime_id_to_canonical_id = {
-            k: i for i, k in enumerate(sorted(self.anime_mapping.keys()))
-        }
-        self.canonical_id_to_anime_id = {
-            v: k for k, v in self.anime_id_to_canonical_id.items()
-        }
+            self.anime_mapping[anime_df["anime_id"]] = anime
+            self.canonical_anime_mapping[t] = anime
+            self.anime_id_to_canonical_id[anime_df["anime_id"]] = t
+            self.canonical_id_to_anime_id[t] = anime_df["anime_id"]
+            t += 1
+        self.max_anime_count = len(self.anime_mapping)
+
+        masking_set = np.zeros(max(self.anime_mapping.keys()) + 1, dtype=bool)
+        masking_set[list(self.anime_mapping.keys())] = True
 
         # Gets all the user watch history
         for user_id, user_df in self.users.groupby("user_id"):
-            anime_list: np.ndarray[int] = np.array(
-                user_df["anime_id"].tolist(), dtype=int
-            )
-            anime_list = anime_list - 1
-            rating_list: np.ndarray[float] = np.array(
-                user_df["rating"].tolist(), dtype=float
-            )
+            anime_list: np.ndarray[int] = user_df["anime_id"].to_numpy(dtype=int)
+            rating_list: np.ndarray[float] = user_df["rating"].to_numpy(dtype=float)
 
             assert len(anime_list) == len(rating_list)
 
             # Filters out ratings that aren't valid with our anime_list
-            valid_indices = np.where(anime_list < MAX_ANIME_COUNT)[0]
+            valid_indices = masking_set[anime_list]
             anime_list: np.ndarray[int] = anime_list[valid_indices]
             rating_list: np.ndarray[float] = rating_list[valid_indices]
-
-            user = User(user_id, anime_list, rating_list, self.k)
 
             # Filter/Preprocess the data
             filtered_watch_history: list[int] = []
             filtered_rating_history: list[int] = []
             imputed_rating_history: list[int] = []
-            for i, anime_id in enumerate(user.watch_history):
+            for anime_id, rating in zip(anime_list, rating_list):
                 # Filter out NSFW
                 current_anime = self.anime_mapping[anime_id]
                 if Genre.Hentai not in current_anime.genres:
-                    filtered_watch_history.append(anime_id)
+                    filtered_watch_history.append(
+                        self.anime_id_to_canonical_id[anime_id]
+                    )
                     filtered_rating_history.append(
                         self.anime_mapping[anime_id].rating
-                        if normalize_unrated and user.rating_history[i] == -1
-                        else user.rating_history[i]
+                        if normalize_unrated and rating == -1
+                        else rating
                     )
                     imputed_rating_history.append(
-                        self.anime_mapping[anime_id].rating
-                        if user.rating_history[i] == -1
-                        else user.rating_history[i]
+                        self.anime_mapping[anime_id].rating if rating == -1 else rating
                     )
-
-            user.watch_history = np.array(filtered_watch_history)
-            user.rating_history = np.array(filtered_rating_history)
-            user.imputed_rating_history = np.array(imputed_rating_history)
+            user = User(
+                user_id,
+                np.array(filtered_watch_history),
+                np.array(filtered_rating_history),
+                np.array(imputed_rating_history),
+                self.k,
+                self.max_anime_count,
+            )
 
             # Filters out users that have too little watch history.
             enough_watch_history = (
@@ -281,9 +283,10 @@ class Evaluator:
             )
             if enough_watch_history:
                 self.user_mapping[user.id] = user
-                # We need the history
+                # We need the history -- James
                 user.generate_masked_history()
-
+        print(f"Total Animes: {len(self.anime_mapping)}")
+        print(f"Total Users: {len(self.user_mapping)}")
         self.idxs = list(self.user_mapping.keys())
 
         # Split the data into train/test/val
@@ -353,7 +356,7 @@ class Evaluator:
         - k: number of anime recommendations your model should present
         """
 
-        user_masked_watch_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
+        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
         for i, id in enumerate(self.test_ids):
             user: User = self.user_mapping[id]
             user.generate_masked_history()
@@ -374,9 +377,11 @@ class Evaluator:
         """
         total_runtime = time.time() - self.start_time
 
-        complete_watch_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
-        user_masked_watch_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
-        ground_truth_of_masked_history = np.zeros((len(self.test_ids), MAX_ANIME_COUNT))
+        complete_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
+        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
+        ground_truth_of_masked_history = np.zeros(
+            (len(self.test_ids), self.max_anime_count)
+        )
         for i, id in enumerate(self.test_ids):
             user: User = self.user_mapping[id]
             complete_watch_history[i] = user.get_imputed_history()
@@ -385,7 +390,7 @@ class Evaluator:
                 complete_watch_history[i] - user_masked_watch_history[i]
             )
 
-        pred = np.zeros((len(self.test_ids), MAX_ANIME_COUNT), dtype=int)
+        pred = np.zeros((len(self.test_ids), self.max_anime_count), dtype=int)
 
         # Sort the indices and generate decreasing values
         decreasing_values = np.arange(k_recommended_shows.shape[1], 0, -1)
