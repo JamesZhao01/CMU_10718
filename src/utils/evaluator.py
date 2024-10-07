@@ -295,7 +295,8 @@ class Evaluator:
 
         self.train_indices = self.idxs[:train_size]
         self.val_ids = self.idxs[train_size : train_size + val_size]
-        self.test_ids = self.idxs[train_size + val_size :]
+        # self.test_ids = self.idxs[train_size + val_size :]
+        self.test_ids = self.idxs[:100]
 
     def get_anime_info(self, id: int):
         return self.anime_mapping[id]
@@ -380,7 +381,6 @@ class Evaluator:
             in ranked order
         """
         total_runtime = time.time() - self.start_time
-
         complete_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
         user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
         ground_truth_of_masked_history = np.zeros(
@@ -409,3 +409,21 @@ class Evaluator:
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
         return total_runtime, score
+
+    def get_train_set(self):
+        """
+        Returns:
+        - user_masked_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
+        - k: number of anime recommendations your model should present
+        """
+
+        user_masked_watch_history = np.zeros((len(self.train_indices), self.max_anime_count))
+        user_watch_history = np.zeros((len(self.train_indices), self.max_anime_count))
+        for i, id in enumerate(self.train_indices):
+            user: User = self.user_mapping[id]
+            user.generate_masked_history()
+            user_masked_watch_history[i] = user.get_masked_history()
+            user_watch_history[i] = user.get_history()
+
+        user_heldout_watch_history = user_watch_history - user_masked_watch_history
+        return user_masked_watch_history, user_heldout_watch_history, self.k
