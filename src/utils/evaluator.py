@@ -1,11 +1,13 @@
-import os
-import pandas as pd
-from enum import Enum
-import random
-import numpy as np
-import time
-from sklearn.metrics import ndcg_score
 import math
+import os
+import random
+import time
+from enum import Enum
+
+import numpy as np
+import pandas as pd
+import tqdm
+from sklearn.metrics import ndcg_score
 
 
 class Type(Enum):
@@ -181,7 +183,9 @@ class Evaluator:
         np.random.seed(42)
         t = 0
         # Gets all the information about the animes
-        for anime_id, anime_df in self.animes.iterrows():
+        for anime_id, anime_df in tqdm.tqdm(
+            self.animes.iterrows(), "parsing animes...", total=len(self.animes)
+        ):
             genres = []
             if not pd.isna(anime_df["genre"]):
                 for unprocessed_string in anime_df["genre"].split(","):
@@ -238,7 +242,9 @@ class Evaluator:
         masking_set[list(self.anime_mapping.keys())] = True
 
         # Gets all the user watch history
-        for user_id, user_df in self.users.groupby("user_id"):
+        for user_id, user_df in tqdm.tqdm(
+            self.users.groupby("user_id"), "parsing users..."
+        ):
             anime_list: np.ndarray[int] = user_df["anime_id"].to_numpy(dtype=int)
             rating_list: np.ndarray[float] = user_df["rating"].to_numpy(dtype=float)
 
