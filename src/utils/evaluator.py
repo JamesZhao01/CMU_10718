@@ -165,11 +165,11 @@ class User:
 
 
 class Evaluator:
-    def __init__(self, path: str, normalize_unrated=True):
+    def __init__(self, path: str, normalize_unrated=True, threshold_watch_history=20):
         self.animes = pd.read_csv(os.path.join(path, "anime.csv"))
         self.users = pd.read_csv(os.path.join(path, "rating.csv"))
         self.k = 10
-        self.threshold_watch_history = 20
+        self.threshold_watch_history = threshold_watch_history
         self.user_mapping = {}
         self.anime_mapping = {}
         self.canonical_anime_mapping = {}
