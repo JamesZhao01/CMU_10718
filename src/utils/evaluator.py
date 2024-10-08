@@ -179,7 +179,6 @@ class Evaluator:
         self.current_idx = 0
         self.normalize_unrated = normalize_unrated
 
-        print(f"{normalize_unrated=}")
         np.random.seed(42)
         t = 0
         # Gets all the information about the animes
