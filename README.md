@@ -6,6 +6,12 @@ conda activate cmu_10718
 pip install -r requirements.txt
 ```
 
+To install fastFM (linux only)
+```bash
+pip install cython
+pip install fastFM
+```
+
 # Datasets
 
 - [CopperUnion Anime Recommendations](https://www.kaggle.com/datasets/CooperUnion/anime-recommendations-database)
