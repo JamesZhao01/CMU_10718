@@ -305,54 +305,38 @@ class Evaluator:
     def get_anime_info(self, id: int):
         return self.anime_mapping[id]
 
-    ###################################################################################
-    # This section is for evaluating on a single item. It's probably not what we'll use
-    # in the long term, but can work for baselines and initial debugging.
-    def start_eval_on_single_test(self):
-        """
-        Run this method to start the evaluation program.
-        You MUST call end_eval_runtime() as soon as possible to get evaluation results.
-        """
-        user_id = self.test_ids[self.current_idx]
-        user: User = self.user_mapping[user_id]
-        user.generate_masked_history()
-        user_masked_watch_history = user.get_imputed_masked_history()
-        self.start_time = time.time()
-        return user_masked_watch_history[None, ...], self.k
-
-    def end_eval_on_single_test(self, k_recommended_shows: np.ndarray[int]):
-        """
-        Run this method to end the evaluation program.
-        I expect k_recommended_shows to be of shape [test_set_size, k]. Test size should be 1.
-        The columns should be ordered by ranking with 0 being the highest and 1 being
-        the lowest.
-        """
-        total_runtime = time.time() - self.start_time
-
-        k_recommended_shows = k_recommended_shows.squeeze()
-        user_id = self.test_ids[self.current_idx]
-        user: User = self.user_mapping[user_id]
-        complete_watch_history = user.get_history()
-        user_masked_watch_history = user.get_masked_history()
-        ground_truth_of_masked_history = (
-            complete_watch_history - user_masked_watch_history
+    def get_ground_truth_ratings_tensor(self) -> np.ndarray[float]:
+        complete_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
+        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
+        ground_truth_of_masked_history = np.zeros(
+            (len(self.test_ids), self.max_anime_count)
         )
+        for i, id in enumerate(self.test_ids):
+            user: User = self.user_mapping[id]
+            complete_watch_history[i] = user.get_imputed_history()
+            user_masked_watch_history[i] = user.get_imputed_masked_history()
+            ground_truth_of_masked_history[i] = (
+                complete_watch_history[i] - user_masked_watch_history[i]
+            )
+        return ground_truth_of_masked_history
 
-        pred = np.zeros(MAX_ANIME_COUNT, dtype=int)
-        # Sort the indices and generate decreasing values
-        decreasing_values = np.arange(len(k_recommended_shows), 0, -1)
+    def get_ground_truth_k_predictions(self) -> np.ndarray[int]:
+        k_predictions = np.zeros((len(self.test_ids), self.k), dtype=int)
+        for i, id in enumerate(self.test_ids):
+            user: User = self.user_mapping[id]
+            complete_watch_history = user.get_imputed_history()
+            user_masked_watch_history = user.get_imputed_masked_history()
+            ground_truth_of_masked_history = (
+                complete_watch_history - user_masked_watch_history
+            )
+            ids = np.nonzero(ground_truth_of_masked_history)[0]
 
-        # Assign the decreasing values to the respective indices
-        pred[k_recommended_shows] = decreasing_values
-
-        score = ndcg_score(
-            ground_truth_of_masked_history[None, ...], pred[None, ...], k=self.k
-        )
-        print(f"This model took {total_runtime} seconds.")
-        print(f"Out of an optimal score of 1.0, you scored {score}.")
-        return total_runtime, score
-
-    ####################################################################################
+            ratings = ground_truth_of_masked_history[ids]
+            sorted_indices = np.argsort(-ratings)
+            sorted_ids = ids[sorted_indices]
+            assert len(sorted_ids) == self.k
+            k_predictions[i] = sorted_ids
+        return k_predictions
 
     def start_eval_test_set(self):
         """
@@ -370,6 +354,20 @@ class Evaluator:
         self.start_time = time.time()
         return user_masked_watch_history, self.k
 
+    def calculate_ndcg(self, k_recommended_shows: np.ndarray[int]):
+        ground_truth_of_masked_history = self.get_ground_truth_ratings_tensor()
+        pred = np.zeros((len(self.test_ids), self.max_anime_count), dtype=int)
+        # Sort the indices and generate decreasing values
+        decreasing_values = np.arange(k_recommended_shows.shape[1], 0, -1)
+
+        # Assign the decreasing values to the respective indices
+        pred[np.arange(len(self.test_ids))[:, None], k_recommended_shows] = (
+            decreasing_values
+        )
+
+        score = ndcg_score(ground_truth_of_masked_history, pred, k=self.k)
+        return score
+
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
         """
         Run this method to end the evaluation program.
@@ -381,32 +379,8 @@ class Evaluator:
             in ranked order
         """
         total_runtime = time.time() - self.start_time
+        score = self.calculate_ndcg(k_recommended_shows)
 
-        complete_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
-        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
-        ground_truth_of_masked_history = np.zeros(
-            (len(self.test_ids), self.max_anime_count)
-        )
-        for i, id in enumerate(self.test_ids):
-            user: User = self.user_mapping[id]
-            complete_watch_history[i] = user.get_imputed_history()
-            user_masked_watch_history[i] = user.get_imputed_masked_history()
-            ground_truth_of_masked_history[i] = (
-                complete_watch_history[i] - user_masked_watch_history[i]
-            )
-
-        pred = np.zeros((len(self.test_ids), self.max_anime_count), dtype=int)
-
-        # Sort the indices and generate decreasing values
-        decreasing_values = np.arange(k_recommended_shows.shape[1], 0, -1)
-
-        # Assign the decreasing values to the respective indices
-        # pred[np.array(k_recommended_shows)] = decreasing_values
-        pred[np.arange(len(self.test_ids))[:, None], k_recommended_shows] = (
-            decreasing_values
-        )
-
-        score = ndcg_score(ground_truth_of_masked_history, pred, k=self.k)
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
         return total_runtime, score
