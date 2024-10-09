@@ -7,3 +7,4 @@ pandas
 scikit-metrics
 scikit-learn
 scipy
+jinja2
