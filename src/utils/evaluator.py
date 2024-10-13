@@ -295,8 +295,8 @@ class Evaluator:
 
         self.train_indices = self.idxs[:train_size]
         self.val_ids = self.idxs[train_size : train_size + val_size]
-        # self.test_ids = self.idxs[train_size + val_size :]
-        self.test_ids = self.idxs[:100]
+        self.test_ids = self.idxs[train_size + val_size :]
+        # self.test_ids = self.idxs[:100]
 
     def get_anime_info(self, id: int):
         return self.anime_mapping[id]
