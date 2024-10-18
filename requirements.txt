@@ -9,3 +9,4 @@ scikit-learn
 scipy
 jinja2
 torch
+implicit
