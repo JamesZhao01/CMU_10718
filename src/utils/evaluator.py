@@ -368,6 +368,28 @@ class Evaluator:
         score = ndcg_score(ground_truth_of_masked_history, pred, k=self.k)
         return score
 
+    def calculate_diversity_by_community_count(self, k_recommended_shows: np.ndarray[int]):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count, 
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+        
+        total_community_count = 0
+        recommended = set()
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                anime:Anime = self.canonical_anime_mapping[id]
+                if id not in recommended:
+                    total_community_count += math.log(anime.membership_count)
+                    recommended.add(id)
+        return total_community_count
+    
+
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
         """
         Run this method to end the evaluation program.
@@ -380,7 +402,9 @@ class Evaluator:
         """
         total_runtime = time.time() - self.start_time
         score = self.calculate_ndcg(k_recommended_shows)
+        diversity = self.calculate_diversity_by_community_count(k_recommended_shows)
 
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
+        print(f"This model has an aggregated diversity score of {diversity}.")
         return total_runtime, score
