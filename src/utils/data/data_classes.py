@@ -1,7 +1,19 @@
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Tuple
 
 import numpy as np
+
+
+class Serializable(ABC):
+    @abstractmethod
+    def to_dict(self) -> dict:
+        raise NotImplementedError("to_dict method not implemented")
+
+    @classmethod
+    @abstractmethod
+    def from_dict(cls, data: dict):
+        raise NotImplementedError("from_dict method not implemented")
 
 
 class Type(Enum):
@@ -60,7 +72,7 @@ class Genre(Enum):
     Yuri = 43
 
 
-class Anime:
+class Anime(Serializable):
     def __init__(
         self,
         id: int,
@@ -78,6 +90,28 @@ class Anime:
         self.episodes: int = episodes
         self.rating: float = rating
         self.membership_count: int = membership_count
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "genres": [genre.name for genre in self.genres],
+            "type": self.type.name,
+            "episodes": self.episodes,
+            "rating": self.rating,
+            "membership_count": self.membership_count,
+        }
+
+    def from_dict(cls, data: dict):
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            genres={Genre[genre] for genre in data["genres"]},
+            type=Type[data["type"]],
+            episodes=data["episodes"],
+            rating=data["rating"],
+            membership_count=data["membership_count"],
+        )
 
 
 class User:
@@ -130,13 +164,41 @@ class User:
         # Masked and Preserved Id's
         self.masked_cais: np.ndarray[int] = None
         self.preserved_cais: np.ndarray[int] = None
-        self.negative_cais: np.ndarray[int] = None  # negative pool for training
+        self.negative_cais: np.ndarray[int] = (
+            None  # negative pool for training. set(all_animes) - set(watch_history)
+        )
 
         # Many-Hot Encoding of features
         self.preserved_features: np.ndarray[int] = None
         self.preserved_imputed_features: np.ndarray[float] = None
         self.masked_features: np.ndarray[int] = None
         self.masked_imputed_features: np.ndarray[float] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "canonical_user_id": self.cuid,
+            "watch_history": self.watch_history.tolist(),
+            "rating_history": self.rating_history.tolist(),
+            "imputed_rating_history": self.imputed_rating_history.tolist(),
+            "k": self.k,
+            "max_anime_count": self.max_anime_count,
+            "lazy_store": self.lazy_store,
+        }
+
+    def from_dict(cls, data: dict):
+        obj = cls(
+            id=data["id"],
+            canonical_user_id=data["canonical_user_id"],
+            watch_history=np.array(data["watch_history"]),
+            rating_history=np.array(data["rating_history"]),
+            imputed_history=np.array(data["imputed_rating_history"]),
+            k=data["k"],
+            max_anime_count=data["max_anime_count"],
+            lazy_store=data["lazy_store"],
+        )
+        obj.generate_masked_history()
+        obj.reseed()
 
     def reseed(self):
         self.rng = np.random.default_rng(seed=id)
@@ -184,7 +246,7 @@ class User:
         """
         Sample n negative items from the negative pool
         """
-        if n <= 0n > len(self.negative_cais):
+        if n <= 0 or n > len(self.negative_cais):
             raise ValueError(
                 f"Cannot sample {n} negative items from pool of size {len(self.negative_cais)} "
                 + f"for user {self.id}"
@@ -201,9 +263,10 @@ class User:
                 f"Cannot sample {n} positive items from pool of size {len(self.preserved_cais)} "
                 + f"for user {self.id}"
             )
-        perm = self.rng.choice(self.preserved_cais, len(self.preserved_cais), replace=False)
+        perm = self.rng.choice(
+            self.preserved_cais, len(self.preserved_cais), replace=False
+        )
         return perm[:n], perm[n:]
-
 
     def get_features(self, imputed=False) -> np.ndarray[float]:
         """
