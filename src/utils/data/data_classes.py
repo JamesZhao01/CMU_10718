@@ -1,19 +1,21 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Tuple
-
+from dataclass_wizard import JSONWizard
 import numpy as np
 
 
-class Serializable(ABC):
-    @abstractmethod
-    def to_dict(self) -> dict:
-        raise NotImplementedError("to_dict method not implemented")
+def encode_ndarray(arr: np.ndarray):
+    return arr.tolist()
 
-    @classmethod
-    @abstractmethod
-    def from_dict(cls, data: dict):
-        raise NotImplementedError("from_dict method not implemented")
+
+def decode_ndarray(arr: list):
+    return np.array(arr)
+
+
+JSONWizard.register_custom_encoder(np.ndarray, encode_ndarray)
+JSONWizard.register_custom_decoder(np.ndarray, decode_ndarray)
 
 
 class Type(Enum):
@@ -72,49 +74,19 @@ class Genre(Enum):
     Yuri = 43
 
 
-class Anime(Serializable):
-    def __init__(
-        self,
-        id: int,
-        name: str,
-        genres: set[Genre],
-        type: Type,
-        episodes: int,
-        rating: float,
-        membership_count: int,
-    ):
-        self.id: int = id
-        self.name: str = name
-        self.genres: set[Genre] = genres
-        self.type: Type = type
-        self.episodes: int = episodes
-        self.rating: float = rating
-        self.membership_count: int = membership_count
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "genres": [genre.name for genre in self.genres],
-            "type": self.type.name,
-            "episodes": self.episodes,
-            "rating": self.rating,
-            "membership_count": self.membership_count,
-        }
-
-    def from_dict(cls, data: dict):
-        return cls(
-            id=data["id"],
-            name=data["name"],
-            genres={Genre[genre] for genre in data["genres"]},
-            type=Type[data["type"]],
-            episodes=data["episodes"],
-            rating=data["rating"],
-            membership_count=data["membership_count"],
-        )
+@dataclass
+class Anime(JSONWizard):
+    id: int
+    name: str
+    type: Type
+    episodes: int
+    rating: float
+    membership_count: int
+    genres: set[Genre] = field(default_factory=set())
 
 
-class User:
+@dataclass
+class User(JSONWizard):
     """
     Copilot Docs:
 
@@ -131,74 +103,37 @@ class User:
         to allow for sampling from within this pool (e.x. positives / negatives)
     The "negative" history is the pool of items that the user has not interacted with -- and can be
         used for sampling negatives during training, outside of the "masked" and "preserved" pool.
-
+    To allow for dynamically sampling "positives" within the "preserved" ids, utility for paritioning
+        is defined in `partition_preserved()`
     """
 
-    def __init__(
-        self,
-        id: int,
-        canonical_user_id: int,
-        watch_history: np.ndarray[int],
-        rating_history: np.ndarray[float],
-        imputed_history: np.ndarray[float],
-        k: int,
-        max_anime_count: int,
-        # only generate feature vectors on the fly. This prevents storing excessive amounts of
-        # sparse vectors to save memory
-        lazy_store: bool = False,
-    ):
-        self.id: int = id
-        self.cuid: int = canonical_user_id
-        self.watch_history: np.ndarray[int] = watch_history
-        self.rating_history: np.ndarray[float] = rating_history
-        self.imputed_rating_history: np.ndarray[float] = imputed_history
-        self.k = k
-        self.max_anime_count: int = max_anime_count
-        self.rng = np.random.default_rng(seed=id)
-        self.lazy_store = lazy_store
+    id: int
+    canonical_user_id: int
+    watch_history: np.ndarray[int]
+    rating_history: np.ndarray[float]
+    imputed_history: np.ndarray[float]
+    k: int
+    max_anime_count: int
+    rng: np.random.Generator | None = None
+    lazy_store: bool = False
 
-        # Featurized Transformations
-        self.mask: np.ndarray[int] = None  # heldout indices [0, len(watch_history))
-        self.preserved: np.ndarray[int] = None  # visible indices [0, len(watch_history)
+    mask: np.ndarray[int] | None = None
+    preserved: np.ndarray[int] | None = None
 
-        # Masked and Preserved Id's
-        self.masked_cais: np.ndarray[int] = None
-        self.preserved_cais: np.ndarray[int] = None
-        self.negative_cais: np.ndarray[int] = (
-            None  # negative pool for training. set(all_animes) - set(watch_history)
-        )
+    masked_cais: np.ndarray[int] | None = None
+    preserved_cais: np.ndarray[int] | None = None
+    negative_cais: np.ndarray[int] | None = None
 
-        # Many-Hot Encoding of features
-        self.preserved_features: np.ndarray[int] = None
-        self.preserved_imputed_features: np.ndarray[float] = None
-        self.masked_features: np.ndarray[int] = None
-        self.masked_imputed_features: np.ndarray[float] = None
+    preserved_features: np.ndarray[int] | None = None
+    preserved_imputed_features: np.ndarray[int] | None = None
+    masked_features: np.ndarray[int] | None = None
+    masked_imputed_features: np.ndarray[int] | None = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "canonical_user_id": self.cuid,
-            "watch_history": self.watch_history.tolist(),
-            "rating_history": self.rating_history.tolist(),
-            "imputed_rating_history": self.imputed_rating_history.tolist(),
-            "k": self.k,
-            "max_anime_count": self.max_anime_count,
-            "lazy_store": self.lazy_store,
-        }
-
-    def from_dict(cls, data: dict):
-        obj = cls(
-            id=data["id"],
-            canonical_user_id=data["canonical_user_id"],
-            watch_history=np.array(data["watch_history"]),
-            rating_history=np.array(data["rating_history"]),
-            imputed_history=np.array(data["imputed_rating_history"]),
-            k=data["k"],
-            max_anime_count=data["max_anime_count"],
-            lazy_store=data["lazy_store"],
-        )
-        obj.generate_masked_history()
-        obj.reseed()
+    def __post_init__(self):
+        self.rng = np.random.default_rng(seed=self.id)
+        if self.mask is None:
+            self.generate_masked_history()
+            self.reseed()
 
     def reseed(self):
         self.rng = np.random.default_rng(seed=id)

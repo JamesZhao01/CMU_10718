@@ -1,16 +1,15 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
 import time
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
 import numpy as np
 import pandas as pd
 import tqdm
 from sklearn.metrics import ndcg_score
-from utils.data.data_classes import Serializable
-
+from dataclass_wizard import JSONWizard
 from utils.data.data_classes import Anime, Genre, Type, User
 
 """
@@ -18,101 +17,56 @@ from utils.data.data_classes import Anime, Genre, Type, User
     
     It is also serializable / unserializable for consistency / reduced load on repeated
     runs of the same data. 
+    
+    cuid = canonical user id
+    caid = cnaonical anime id
+    
+    a canonical id is a remapping of ids to a dense increasing sequence 
+
+    E.x.
+    anime_id | canonical_anime_id|
+    ------------------------------
+    34       | 0
+    22       | 1
+    97       | 2
 """
 
 
 @dataclass
-class DataModule(Serializable):
-    def to_dict(self) -> dict:
-        return {
-            "k": self.k,
-            "path": self.path,
-            "normalize_unrated": self.normalize_unrated,
-            "threshold_watch_history": self.threshold_watch_history,
-            "verbose": self.verbose,
-            "holdout_type": self.holdout_type,
-            "user_mapping": {k: v.to_dict() for k, v in self.user_mapping.items()},
-            "anime_mapping": {k: v.to_dict() for k, v in self.anime_mapping.items()},
-            "canonical_anime_mapping": {
-                k: v.to_dict() for k, v in self.canonical_anime_mapping.items()
-            },
-            "canonical_user_mapping": {
-                k: v.to_dict() for k, v in self.canonical_user_mapping.items()
-            },
-            "anime_id_to_caid": self.anime_id_to_caid,
-            "caid_to_anime_id": self.caid_to_anime_id,
-            "user_id_to_cuid": self.user_id_to_cuid,
-            "cuid_to_user_id": self.cuid_to_user_id,
-            "user_ids": self.user_ids,
-            "max_anime_count": self.max_anime_count,
-            "max_user_count": self.max_user_count,
-            "train_indices": self.train_indices,
-            "val_indices": self.val_indices,
-            "test_indices": self.test_indices,
-        }
+class DataModule(JSONWizard):
+    k: int
+    path: str
+    thresholded_watch_history: int
+    normalize_unrated: bool
+    verbose: bool
 
-    def from_dict(cls, data: dict):
-        return cls(**data)
+    holdout_type: Literal["user", "interaction"]
+    rng: np.random.Generator = field(default_factory=np.random.default_rng(42))
 
-    def assign_propoperties(self, data: dict):
-        self.user_mapping = {}
-        self.anime_mapping = {}
-        self.canonical_anime_mapping = {}
-        self.canonical_user_mapping = {}
-        self.anime_id_to_caid = {}
-        self.caid_to_anime_id = {}
-        self.user_id_to_cuid = {}
-        self.cuid_to_user_id = {}
-        self.user_ids = []
+    user_mapping: Dict[int, User] = field(default_factory=dict)
+    anime_mapping: Dict[int, Anime] = field(default_factory=dict)
+    canonical_user_mapping: Dict[int, User] = field(default_factory=dict)
+    canonical_anime_mapping: Dict[int, Anime] = field(default_factory=dict)
+    anime_id_to_caid: Dict[int, int] = field(default_factory=dict)
+    caid_to_anime_id: Dict[int, int] = field(default_factory=dict)
+    user_id_to_cuid: Dict[int, int] = field(default_factory=dict)
+    cuid_to_user_id: Dict[int, int] = field(default_factory=dict)
+    cuids: List[int] = field(default_factory=list)
 
-        self.max_anime_count: int = -1
-        self.max_user_count: int = -1
-        self.user_ids: List[int] = []
+    max_anime_count: int = -1
+    max_user_count: int = -1
 
-        self.train_indices: Optional[List[int]] = []
-        self.val_indices: Optional[List[int]] = []
-        self.test_indices: Optional[List[int]] = []
+    train_cuids: List[int] = field(default_factory=list)
+    val_cuids: List[int] = field(default_factory=list)
+    test_cuids: List[int] = field(default_factory=list)
 
-    def __init__(
-        self,
-        path: str,
-        k: int = 10,
-        normalize_unrated=True,
-        threshold_watch_history=20,
-        verbose=True,
-        holdout_type="user",
-        *args,
-        **kwargs,
-    ):
-        self.k: int = k
-        self.path: str = path
-        self.threshold_watch_history: int = threshold_watch_history
-        self.normalize_unrated: bool = normalize_unrated
-        self.threshold_watch_history: int = threshold_watch_history
-        self.verbose = verbose
-        assert holdout_type in ["user", "item"]
-        self.holdout_type = holdout_type
-        self.rng: np.random.Generator = np.random.default_rng(42)
+    initialized: bool = False
 
-        self.user_mapping = {}
-        self.anime_mapping = {}
-        self.canonical_anime_mapping = {}
-        self.canonical_user_mapping = {}
-        self.anime_id_to_caid = {}
-        self.caid_to_anime_id = {}
-        self.user_id_to_cuid = {}
-        self.cuid_to_user_id = {}
-        self.user_ids = []
-
-        self.max_anime_count: int = -1
-        self.max_user_count: int = -1
-        self.user_ids: List[int] = []
-
-        self.train_indices: Optional[List[int]] = []
-        self.val_indices: Optional[List[int]] = []
-        self.test_indices: Optional[List[int]] = []
-
-    def construct(self):
+    def __post_init__(self):
+        assert self.holdout_type in ["interaction"]
+        if self.initialized:
+            return
+        self.initialized = True
         animes = pd.read_csv(os.path.join(self.path, "anime.csv"))
         users = pd.read_csv(os.path.join(self.path, "rating.csv"))
 
@@ -208,7 +162,7 @@ class DataModule(Serializable):
                     filtered_watch_history.append(self.anime_id_to_caid[anime_id])
                     filtered_rating_history.append(
                         self.anime_mapping[anime_id].rating
-                        if normalize_unrated and rating == -1
+                        if self.normalize_unrated and rating == -1
                         else rating
                     )
                     imputed_rating_history.append(
@@ -224,38 +178,35 @@ class DataModule(Serializable):
             canonical_user_id = next_canonical_user_id
             next_canonical_user_id += 1
             user = User(
-                user_id,
-                canonical_user_id,
-                np.array(filtered_watch_history),
-                np.array(filtered_rating_history),
-                np.array(imputed_rating_history),
-                self.k,
-                self.max_anime_count,
+                id=user_id,
+                cuid=canonical_user_id,
+                watch_history=np.array(filtered_watch_history),
+                rating_history=np.array(filtered_rating_history),
+                imputed_history=np.array(imputed_rating_history),
+                k=self.k,
+                max_anime_count=self.max_anime_count,
                 lazy_store=False,
             )
             self.user_mapping[user.id] = user
             self.canonical_user_mapping[user.cuid] = user
             self.user_id_to_cuid[user.id] = user.cuid
             self.cuid_to_user_id[user.cuid] = user.id
-            user.generate_masked_history()
 
         self.max_anime_count = len(self.anime_mapping)
         self.max_user_count = len(self.user_mapping)
-
-        # Split Data
-        self.user_ids = list(sorted(self.user_mapping.keys()))
+        self.cuids = range(self.max_user_count)
 
         if self.holdout_type == "user":
             train_size = int(0.8 * len(self.user_ids))
             val_size = int(0.1 * len(self.user_ids))
 
-            self.train_indices = self.user_ids[:train_size]
-            self.val_indices = self.user_ids[train_size : train_size + val_size]
-            self.test_indices = self.user_ids[train_size + val_size :]
+            self.train_cuids = self.cuids[:train_size]
+            self.val_cuids = self.cuids[train_size : train_size + val_size]
+            self.test_cuids = self.cuids[train_size + val_size :]
         elif self.holdout_type == "interaction":
-            self.train_indices = self.user_ids
-            self.val_indices = None
-            self.test_indices = None
+            self.train_cuids = self.cuids
+            self.val_cuids = []
+            self.test_cuids = []
 
         if self.verbose:
             data_hash = hashlib.md5(

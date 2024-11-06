@@ -23,72 +23,87 @@ For Matrix Factorization models, user embeddings will need to be re-trained duri
 For Two-Tower models, models will need to made agnostic to user embeddings
 """
 
+import time
+
+import numpy as np
+from sklearn.metrics import ndcg_score
+
+from utils.data.data_module import DataModule
+
 
 class TestBench:
-    def get_anime_info(self, id: int):
-        return self.anime_mapping[id]
+    def __init__(self, data_module: DataModule):
+        self.data_module = data_module
 
-    def get_ground_truth_ratings_tensor(self) -> np.ndarray[float]:
-        complete_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
-        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
-        ground_truth_of_masked_history = np.zeros(
-            (len(self.test_ids), self.max_anime_count)
-        )
-        for i, id in enumerate(self.test_ids):
-            user: User = self.user_mapping[id]
-            complete_watch_history[i] = user.get_imputed_history()
-            user_masked_watch_history[i] = user.get_imputed_masked_history()
-            ground_truth_of_masked_history[i] = (
-                complete_watch_history[i] - user_masked_watch_history[i]
-            )
-        return ground_truth_of_masked_history
+        self.k = data_module.k
+        self.n_test = len(self.data_module.test_cuids)
+        self.n_anime = self.data_module.max_anime_count
 
-    def get_ground_truth_k_predictions(self) -> np.ndarray[int]:
-        k_predictions = np.zeros((len(self.test_ids), self.k), dtype=int)
-        for i, id in enumerate(self.test_ids):
-            user: User = self.user_mapping[id]
-            complete_watch_history = user.get_imputed_history()
-            user_masked_watch_history = user.get_imputed_masked_history()
-            ground_truth_of_masked_history = (
-                complete_watch_history - user_masked_watch_history
+    def get_preserved_feature_tensor(self) -> np.ndarray[float]:
+        """_summary_
+
+        Returns:
+            np.ndarray[float]: _description_
+        """
+        preserved_histories = [
+            self.data_module.canonical_user_mapping[cuid].get_preserved_features()
+            for cuid in self.data_module.test_cuids
+        ]
+        arr = np.vstack(preserved_histories)
+        assert arr.shape == (self.n_test, self.n_anime)
+        return arr
+
+    def get_masked_feature_tensor(self) -> np.ndarray[float]:
+        """_summary_
+
+        Returns:
+            np.ndarray[float]: _description_
+        """
+        preserved_histories = [
+            self.data_module.canonical_user_mapping[cuid].get_masked_features(
+                imputed=True
             )
+            for cuid in self.data_module.test_cuids
+        ]
+        arr = np.vstack(preserved_histories)
+        assert arr.shape == (self.n_test, self.n_anime)
+        return arr
+
+    def get_masked_top_k_tensor(self) -> np.ndarray[int]:
+        k_predictions = np.zeros((self.n_test, self.k), dtype=int)
+        for cuid in self.data_module.cuids:
+            user = self.data_module.canonical_user_mapping[id]
+            ground_truth_of_masked_history = user.get_masked_features(imputed=True)
             ids = np.nonzero(ground_truth_of_masked_history)[0]
-
             ratings = ground_truth_of_masked_history[ids]
+
             sorted_indices = np.argsort(-ratings)
             sorted_ids = ids[sorted_indices]
             assert len(sorted_ids) == self.k
-            k_predictions[i] = sorted_ids
+            k_predictions[cuid] = sorted_ids
         return k_predictions
 
     def start_eval_test_set(self):
         """
         Returns:
-        - user_masked_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
+        - user_preserved_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
         - k: number of anime recommendations your model should present
         """
 
-        user_masked_watch_history = np.zeros((len(self.test_ids), self.max_anime_count))
-        for i, id in enumerate(self.test_ids):
-            user: User = self.user_mapping[id]
-            user.generate_masked_history()
-            user_masked_watch_history[i] = user.get_masked_history()
-
         self.start_time = time.time()
-        return user_masked_watch_history, self.k
+        user_preserved_watch_history = self.get_preserved_feature_tensor()
+        return user_preserved_watch_history, self.k
 
     def calculate_ndcg(self, k_recommended_shows: np.ndarray[int]):
-        ground_truth_of_masked_history = self.get_ground_truth_ratings_tensor()
-        pred = np.zeros((len(self.test_ids), self.max_anime_count), dtype=int)
+        masked_feature_ground_truth_scores = self.get_masked_feature_tensor()
+        pred = np.zeros((self.n_test, self.n_anime), dtype=int)
         # Sort the indices and generate decreasing values
         decreasing_values = np.arange(k_recommended_shows.shape[1], 0, -1)
 
         # Assign the decreasing values to the respective indices
-        pred[np.arange(len(self.test_ids))[:, None], k_recommended_shows] = (
-            decreasing_values
-        )
+        pred[np.arange(self.n_test)[:, None], k_recommended_shows] = decreasing_values
 
-        score = ndcg_score(ground_truth_of_masked_history, pred, k=self.k)
+        score = ndcg_score(masked_feature_ground_truth_scores, pred, k=self.k)
         return score
 
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
