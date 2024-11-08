@@ -8,3 +8,4 @@ scikit-metrics
 scikit-learn
 scipy
 jinja2
+sentence-transformers
