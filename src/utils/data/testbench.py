@@ -28,6 +28,7 @@ import time
 import numpy as np
 from sklearn.metrics import ndcg_score
 
+from recommender.generic_recommender import GenericRecommender
 from utils.data.data_module import DataModule
 
 
@@ -122,3 +123,16 @@ class TestBench:
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
         return total_runtime, score
+
+    def full_evaluation(self, recommender: GenericRecommender):
+        preserved_features, k = self.start_eval_test_set()
+        k_recommended_shows = recommender.infer(preserved_features, k)
+        total_runtime, score = self.end_eval_test_set(k_recommended_shows)
+
+        return {
+            "total_runtime": total_runtime,
+            "score": score,
+            "k_recommended_shows": k_recommended_shows,
+            "preserved_features": preserved_features,
+            "k": k,
+        }
