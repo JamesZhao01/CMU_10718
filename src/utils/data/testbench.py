@@ -23,6 +23,7 @@ For Matrix Factorization models, user embeddings will need to be re-trained duri
 For Two-Tower models, models will need to made agnostic to user embeddings
 """
 
+import math
 import time
 from datetime import datetime
 import tqdm
@@ -31,6 +32,7 @@ import numpy as np
 from sklearn.metrics import ndcg_score
 
 from recommender.generic_recommender import GenericRecommender
+from utils.data.data_classes import Anime
 from utils.data.data_module import DataModule
 
 
@@ -117,6 +119,29 @@ class TestBench:
 
         score = ndcg_score(masked_feature_ground_truth_scores, pred, k=self.k)
         return score
+
+    def calculate_diversity_by_community_count(
+        self, k_recommended_shows: np.ndarray[int]
+    ):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count,
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+
+        total_community_count = 0
+        recommended = set()
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                anime: Anime = self.canonical_anime_mapping[id]
+                if id not in recommended:
+                    total_community_count += math.log(anime.membership_count)
+                    recommended.add(id)
+        return total_community_count
 
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
         """
