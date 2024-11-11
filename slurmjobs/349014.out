@@ -1,0 +1,24 @@
+babel-4-37
+   JOB_GRES=gpu:A6000:1
+     Nodes=babel-4-37 CPU_IDs=2-3 Mem=65536 GRES=gpu:A6000:1(IDX:2)
+Namespace(cache_dir='/data/user_data/taeyoun3/huggingface/hub', data_path='../data/copperunion', embedder_name='thenlper/gte-base', embed_batch_size=128, embedding_size=128, learning_rate=0.0003, epochs=50, negative_num=200, grad_accum=20, temperature=1)
+normalize_unrated=False
+Total Animes: 12294
+Total Users: 54077
+Traceback (most recent call last):
+  File "/home/taeyoun3/mlip/CMU_10718/train-embedder.py", line 641, in <module>
+    fresh_embedder = nn.Embedding(len(EVAL.anime_mapping)+1, args.embedding_size).cuda()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/taeyoun3/miniconda3/envs/mlip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1050, in cuda
+    return self._apply(lambda t: t.cuda(device))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/taeyoun3/miniconda3/envs/mlip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 927, in _apply
+    param_applied = fn(param)
+                    ^^^^^^^^^
+  File "/home/taeyoun3/miniconda3/envs/mlip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1050, in <lambda>
+    return self._apply(lambda t: t.cuda(device))
+                                 ^^^^^^^^^^^^^^
+  File "/home/taeyoun3/miniconda3/envs/mlip/lib/python3.11/site-packages/torch/cuda/__init__.py", line 319, in _lazy_init
+    torch._C._cuda_init()
+RuntimeError: No CUDA GPUs are available
+job finished

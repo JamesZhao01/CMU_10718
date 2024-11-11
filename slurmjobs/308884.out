@@ -1,0 +1,4 @@
+   JOB_GRES=gpu:A6000:1
+     Nodes=babel-11-13 CPU_IDs=26-27 Mem=65536 GRES=gpu:A6000:1(IDX:3)
+python: can't open file '/home/taeyoun3/mlip/CMU_10718/start_code/train-embedder.py': [Errno 2] No such file or directory
+job finished

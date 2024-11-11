@@ -1,0 +1,7 @@
+   JOB_GRES=gpu:A6000:1
+     Nodes=babel-0-19 CPU_IDs=12-13 Mem=65536 GRES=gpu:A6000:1(IDX:6)
+
+EnvironmentLocationNotFound: Not a conda environment: /data/taeyoun_kim/miniconda3/envs/mlip
+
+python: can't open file '/home/taeyoun3/mlip/CMU_10718/start_code/train-embedder.py': [Errno 2] No such file or directory
+job finished

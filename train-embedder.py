@@ -14,7 +14,6 @@ from torch import Tensor
 import torch.nn.functional as F
 from peft import get_peft_model, LoraConfig
 from itertools import islice
-
 from src.utils import evaluator
 
 def batch_iterable(iterable, batch_size):
@@ -85,6 +84,7 @@ def get_data(EVALUATOR, set):
         history_test_masked, history_test_heldout, test_k = EVALUATOR.get_train_set()
     elif set == 'test':
         history_test_masked, history_test_heldout, test_k = EVALUATOR.start_eval_test_set()
+
     # user_dict = dict()
     # for i in range(len(history_test_masked)):
     #     user_id = EVALUATOR.test_ids[i]
@@ -103,16 +103,17 @@ def get_data(EVALUATOR, set):
     #         anime_name = EVALUATOR.anime_mapping[canonical_id].name
     #         user_dict[user_id]['predict'][anime_id] = [anime_name, canonical_id, history_test_heldout[i][anime_id].item()]
 
-    # anime_dict = dict()
-    # for i in EVALUATOR.anime_mapping.keys():
-    #     anime_dict[i] = {
-    #         'Anime ID': i,
-    #         'Anime Name': EVALUATOR.anime_mapping[i].name,
-    #         # 'Genre': [genre.name for genre in EVALUATOR.anime_mapping[i].genres],
-    #         # 'Type': EVALUATOR.anime_mapping[i].type.name,
-    #         # 'Episodes': EVALUATOR.anime_mapping[i].episodes,
-    #         'Rating': EVALUATOR.anime_mapping[i].rating,
-    #     }
+    anime_dict = dict()
+    for i in EVALUATOR.anime_mapping.keys():
+        anime_dict[i] = {
+            'Anime ID': i,
+            'Anime Name': EVALUATOR.anime_mapping[i].name,
+            # 'Genre': [genre.name for genre in EVALUATOR.anime_mapping[i].genres],
+            # 'Type': EVALUATOR.anime_mapping[i].type.name,
+            # 'Episodes': EVALUATOR.anime_mapping[i].episodes,
+            # 'Rating': EVALUATOR.anime_mapping[i].rating,
+        }
+
     user_history = []
     user_predict = []
     for i in range(len(history_test_masked)):
@@ -120,7 +121,7 @@ def get_data(EVALUATOR, set):
     for i in range(len(history_test_heldout)):
         user_predict.append(history_test_heldout[i].nonzero()[0])
 
-    return user_history, user_predict, test_k
+    return user_history, user_predict, test_k, anime_dict
 
 def get_word2vec(user_dict, anime_dict):
     user_history_sentences = []
@@ -322,7 +323,7 @@ def train_embedder(retriever_user, retriever_anime, user_history_embed, anime_em
                 optimizer.zero_grad()
 
             if i % 100 == 0:
-                print(f'Epoch: {epoch}, User: {i}, Avg Loss: {np.mean(loss_list)}')
+                print(f'Epoch: {epoch}, User: {i}, Avg Loss: {np.mean(loss_list)}', flush=True)
  
         if i % args.grad_accum != 0:
             optimizer.step()
@@ -397,7 +398,7 @@ def train_model(user_dict, user_history_sentences, user_predict_sentences, anime
                 optimizer.zero_grad()
 
             if i % 5 == 0:
-                print(f'Epoch: {epoch}, User: {i}, Avg Loss: {np.mean(loss_list)}')
+                print(f'Epoch: {epoch}, User: {i}, Avg Loss: {np.mean(loss_list)}', flush=True)
  
         if i % args.grad_accum != 0:
             optimizer.step()
@@ -405,8 +406,9 @@ def train_model(user_dict, user_history_sentences, user_predict_sentences, anime
 
     return model, tokenizer
 
-def train_awesome_embedder(fresh_embedder, user_history, user_predict):
+def train_awesome_embedder(fresh_embedder, anime_name_embeddings, user_history, user_predict):
     fresh_embedder.train()
+    text_embedder.train()
     optimizer = torch.optim.Adam(fresh_embedder.parameters(), lr=args.learning_rate)
     loss_list = deque(maxlen=100)
     all_anime_ids = set(range(len(EVAL.anime_mapping)))
@@ -416,6 +418,9 @@ def train_awesome_embedder(fresh_embedder, user_history, user_predict):
             query_input_batch = []
             positive_animes_batch = []
             negative_animes_batch = []
+            # query_name_batch = []
+            positive_name_batch = []
+            negative_name_batch = []
             for i, (query_list, predict_list) in enumerate(zip(user_history_batch, user_predict_batch)):
                 query_input = torch.tensor(query_list).cuda()
                 positive_animes = torch.tensor(predict_list).cuda()
@@ -425,6 +430,23 @@ def train_awesome_embedder(fresh_embedder, user_history, user_predict):
                 query_input_batch.append(query_input)
                 positive_animes_batch.append(positive_animes)
                 negative_animes_batch.append(negative_animes)
+
+                # name_list = []
+                # for anime_id in query_input:
+                #     name_list.append(anime_dict[EVAL.canonical_id_to_anime_id[anime_id.item()]]['Anime Name'])
+                # query_name_batch.append(name_list)
+
+                name_list = []
+                for anime_id in positive_animes:
+                    name_list.append(anime_name_embeddings[EVAL.canonical_id_to_anime_id[anime_id.item()]])
+                positive_name_batch.append(name_list)
+
+                name_list = []
+                for anime_id in negative_animes:
+                    name_list.append(anime_name_embeddings[EVAL.canonical_id_to_anime_id[anime_id.item()]])
+                negative_name_batch.append(name_list)
+            positive_name_batch_tensor = torch.stack([torch.stack(name_list) for name_list in positive_name_batch]).squeeze()
+            negative_name_batch_tensor = torch.stack([torch.stack(name_list) for name_list in negative_name_batch]).squeeze()
 
             ### pad query_input_batch to longest and then stack
             max_len = max([len(query) for query in query_input_batch])
@@ -449,6 +471,12 @@ def train_awesome_embedder(fresh_embedder, user_history, user_predict):
             query_output_batch = query_output_batch.mean(dim=1).reshape(query_output_batch.shape[0], -1)
             query_output_batch = query_output_batch.reshape(-1, 1, args.embedding_size)
 
+            positive_output_batch = torch.concat([positive_output_batch, positive_name_batch_tensor], dim=-1)
+            negative_output_batch = torch.concat([negative_output_batch, negative_name_batch_tensor], dim=-1)
+
+            ##repeat the last dimension of query_output_batch to match the last dimension of positive_output_batch and negative_output_batch
+            query_output_batch =  query_output_batch.repeat(1, 1, 7)
+
             negative_cos_sim = torch.cosine_similarity(query_output_batch, negative_output_batch, dim=2) / args.temperature
             positive_cos_sim = torch.cosine_similarity(query_output_batch, positive_output_batch, dim=2) / args.temperature
 
@@ -465,7 +493,7 @@ def train_awesome_embedder(fresh_embedder, user_history, user_predict):
             optimizer.zero_grad()
 
             if batch_idx % 10 == 0:
-                print(f'Epoch: {epoch}, User Batch: {batch_idx}, Avg Loss: {np.mean(loss_list)}')
+                print(f'Epoch: {epoch}, User Batch: {batch_idx}, Avg Loss: {np.mean(loss_list)}', flush=True)
 
     return fresh_embedder
 
@@ -537,7 +565,7 @@ def evaluate_embedder_big(retriever, tokenizer, user_history_sentences, anime_se
 
     return top_k
 
-def evaluate_awesome_embedder(fresh_embedder, user_history, test_k):
+def evaluate_awesome_embedder(fresh_embedder, anime_name_embeddings, user_history, test_k):
     fresh_embedder.eval()
     user_embeddings = torch.zeros((len(user_history), args.embedding_size)).cuda()
     anime_embeddings = torch.zeros((len(EVAL.anime_mapping), args.embedding_size)).cuda()
@@ -548,13 +576,24 @@ def evaluate_awesome_embedder(fresh_embedder, user_history, test_k):
         user_output = user_output.mean(dim=0)
         user_embeddings[i] = user_output
 
-    for anime_id in all_anime_ids:
-        anime_input = torch.tensor(anime_id).cuda()
-        anime_output = fresh_embedder(anime_input)
-        anime_embeddings[anime_id] = anime_output
+    anime_name_embeddings_list = []
+    with torch.no_grad():
+        for anime_id in all_anime_ids:
+            name_embedding = anime_name_embeddings[EVAL.canonical_id_to_anime_id[anime_id]]
+            anime_name_embeddings_list.append(name_embedding)
+            anime_input = torch.tensor(anime_id).cuda()
+            anime_output = fresh_embedder(anime_input)
+            anime_embeddings[anime_id] = anime_output
+
+    anime_name_embeddings = torch.stack(anime_name_embeddings_list).cpu().numpy().squeeze()
+
 
     user_embeddings = user_embeddings.detach().cpu().numpy()
     anime_embeddings = anime_embeddings.detach().cpu().numpy()
+
+    anime_embeddings = np.concatenate([anime_embeddings, anime_name_embeddings], axis=-1)
+    user_embeddings =  np.tile(user_embeddings, (1, 7))
+
     user_embeddings_norm = user_embeddings / np.linalg.norm(user_embeddings, axis=1, keepdims=True)
     anime_embeddings_norm = anime_embeddings / np.linalg.norm(anime_embeddings, axis=1, keepdims=True)
     scores = np.dot(user_embeddings_norm, anime_embeddings_norm.T)
@@ -567,14 +606,29 @@ def evaluate_awesome_embedder(fresh_embedder, user_history, test_k):
 
     return top_k
 
+def get_text_embeddings(text_embedder, text_tokenizer, anime_dict):
+    text_embedder.eval()
+    anime_name_embeddings = dict()
+    with torch.no_grad():
+        for anime_key, anime_value in tqdm(anime_dict.items()):
+            anime_name = anime_value['Anime Name']
+            anime_name = text_tokenizer(anime_name, max_length=16, padding=True, truncation=True, return_tensors='pt')
+            anime_name = {k: v.to('cuda') for k, v in anime_name.items()}
+            outputs = text_embedder(**anime_name)
+            embeddings = average_pool(outputs.last_hidden_state, anime_name['attention_mask'])
+            anime_name_embeddings[anime_key] = embeddings
+
+    return anime_name_embeddings
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", type=str, default='/data/taeyoun_kim/jailbreak_work/attack_mlip/big_attack/data/copperunion')
+    parser.add_argument("-cache_dir", "--cache_dir", type=str, default="/data/user_data/taeyoun3/huggingface/hub", help="Path to the cache directory")
+    parser.add_argument("--data_path", type=str, default='../data/copperunion')
     parser.add_argument("--embedder_name", type=str, default="thenlper/gte-base")
     parser.add_argument("--embed_batch_size", type=int, default=128)
     parser.add_argument("--embedding_size", type=int, default=128)   
     parser.add_argument("--learning_rate", type=float, default=3e-3)
-    parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--epochs", type=int, default=25) #25
     parser.add_argument("--negative_num", type=int, default=100)
     parser.add_argument("--grad_accum", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=1)
@@ -583,10 +637,15 @@ if __name__ == '__main__':
 
     EVAL = evaluator.Evaluator(path=args.data_path, normalize_unrated=False)
     # user_dict, anime_dict, test_k = get_data(EVAL)
-    user_history, user_predict, test_k = get_data(EVAL, 'train')
+    user_history, user_predict, test_k, anime_dict = get_data(EVAL, 'train')
     fresh_embedder = nn.Embedding(len(EVAL.anime_mapping)+1, args.embedding_size).cuda()
+    text_embedder = AutoModel.from_pretrained(args.embedder_name, cache_dir=args.cache_dir).cuda()
+    text_tokenizer = AutoTokenizer.from_pretrained(args.embedder_name)
+
+    anime_name_embeddings = get_text_embeddings(text_embedder, text_tokenizer, anime_dict)
+
     # fresh_embedder = AwesomeEMBEDDER(args.embedding_size).cuda()
-    fresh_embedder = train_awesome_embedder(fresh_embedder, user_history, user_predict)
+    fresh_embedder = train_awesome_embedder(fresh_embedder, anime_name_embeddings, user_history, user_predict)
 
 
     # user_history_embed, user_predict_embed, anime_embed = get_word2vec(user_dict, anime_dict)
@@ -597,8 +656,8 @@ if __name__ == '__main__':
     # retriever_user, retriever_anime = train_embedder(retriever_user, retriever_anime, user_history_embed, anime_embed, user_dict, anime_dict)
     # user_history_sentences, user_predict_sentences, anime_sentences = get_sentences()
     # retriever, tokenizer = train_model(user_dict, user_history_sentences, user_predict_sentences, anime_sentences)
-    user_history, user_predict, test_k = get_data(EVAL, 'test')
-    top_k = evaluate_awesome_embedder(fresh_embedder, user_history, test_k)
+    user_history, user_predict, test_k, _ = get_data(EVAL, 'test')
+    top_k = evaluate_awesome_embedder(fresh_embedder, anime_name_embeddings, user_history, test_k)
     # top_k = evaluate_embedder(retriever_user, retriever_anime, user_history_embed, anime_embed, user_dict, test_k)
     # top_k = evaluate_embedder_big(retriever, tokenizer, user_history_sentences, anime_sentences, user_dict, test_k)
     score = EVAL.end_eval_test_set(top_k)
