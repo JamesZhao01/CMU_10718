@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+import functools
 from typing import Tuple
-from dataclass_wizard import JSONWizard
+from dataclass_wizard import JSONWizard, json_field
 import numpy as np
 
 
@@ -14,8 +15,53 @@ def decode_ndarray(arr: list):
     return np.array(arr)
 
 
-JSONWizard.register_custom_encoder(np.ndarray, encode_ndarray)
-JSONWizard.register_custom_decoder(np.ndarray, decode_ndarray)
+def encode_set(data: set):
+    return [v.name for v in data]
+
+
+def decode_set(arr: list, cls: type):
+    return {cls[v] for v in arr}
+
+
+def make_ndarray_field():
+    field(
+        metadata={
+            "dataclass_wizard": {"encoder": encode_ndarray, "decoder": decode_ndarray}
+        }
+    )
+
+
+def make_optional_ndarray_field():
+    field(
+        metadata={
+            "dataclass_wizard": {"encoder": encode_ndarray, "decoder": decode_ndarray}
+        },
+        default=None,
+    )
+
+
+def make_set_enum_field(cls: type):
+    field(
+        metadata={
+            "dataclass_wizard": {
+                "encoder": encode_set,
+                "decoder": functools.partial(decode_set, cls=cls),
+            }
+        },
+        default_factory=set,
+    )
+
+
+def make_enum_field(cls: type):
+    field(
+        metadata={
+            "dataclass_wizard": {
+                "encoder": lambda x: x.name,
+                "decoder": lambda x: cls[x],
+            }
+        },
+        default_factory=set,
+    )
 
 
 class Type(Enum):
@@ -78,11 +124,11 @@ class Genre(Enum):
 class Anime(JSONWizard):
     id: int
     name: str
-    type: Type
     episodes: int
     rating: float
     membership_count: int
-    genres: set[Genre] = field(default_factory=set())
+    type: Type = make_enum_field(Type)
+    genres: set[Genre] = make_set_enum_field(Genre)
 
 
 @dataclass
@@ -108,26 +154,28 @@ class User(JSONWizard):
     """
 
     id: int
-    canonical_user_id: int
-    watch_history: np.ndarray[int]
-    rating_history: np.ndarray[float]
-    imputed_history: np.ndarray[float]
+    cuid: int
     k: int
     max_anime_count: int
-    rng: np.random.Generator | None = None
+    watch_history: np.ndarray[int] = make_ndarray_field()
+    rating_history: np.ndarray[float] = make_ndarray_field()
+    imputed_history: np.ndarray[float] = make_ndarray_field()
+    rng: np.random.Generator | None = field(
+        default=None, metadata={"dataclass_wizard": {"exclude": True}}
+    )
     lazy_store: bool = False
 
-    mask: np.ndarray[int] | None = None
-    preserved: np.ndarray[int] | None = None
+    mask: np.ndarray[int] | None = make_optional_ndarray_field()
+    preserved: np.ndarray[int] | None = make_optional_ndarray_field()
 
-    masked_cais: np.ndarray[int] | None = None
-    preserved_cais: np.ndarray[int] | None = None
-    negative_cais: np.ndarray[int] | None = None
+    masked_cais: np.ndarray[int] | None = make_optional_ndarray_field()
+    preserved_cais: np.ndarray[int] | None = make_optional_ndarray_field()
+    negative_cais: np.ndarray[int] | None = make_optional_ndarray_field()
 
-    preserved_features: np.ndarray[int] | None = None
-    preserved_imputed_features: np.ndarray[int] | None = None
-    masked_features: np.ndarray[int] | None = None
-    masked_imputed_features: np.ndarray[int] | None = None
+    preserved_features: np.ndarray[int] | None = make_optional_ndarray_field()
+    preserved_imputed_features: np.ndarray[int] | None = make_optional_ndarray_field()
+    masked_features: np.ndarray[int] | None = make_optional_ndarray_field()
+    masked_imputed_features: np.ndarray[int] | None = make_optional_ndarray_field()
 
     def __post_init__(self):
         self.rng = np.random.default_rng(seed=self.id)
@@ -136,7 +184,7 @@ class User(JSONWizard):
             self.reseed()
 
     def reseed(self):
-        self.rng = np.random.default_rng(seed=id)
+        self.rng = np.random.default_rng(seed=self.id)
 
     def reshuffle(self):
         """
@@ -205,11 +253,11 @@ class User(JSONWizard):
 
     def get_features(self, imputed=False) -> np.ndarray[float]:
         """
-        Returns feature vector of the rating history of the user.
+        Returns feature vector of the entire history of the user.
         """
         one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         one_hot_encoding[self.watch_history] = (
-            self.imputed_rating_history if imputed else self.rating_history
+            self.imputed_history if imputed else self.rating_history
         )
         return one_hot_encoding
 
@@ -220,7 +268,7 @@ class User(JSONWizard):
         assert self.preserved_cais is not None
         one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         one_hot_encoding[self.preserved_cais] = (
-            self.imputed_rating_history if imputed else self.rating_history
+            self.imputed_history if imputed else self.rating_history
         )[self.preserved]
         return one_hot_encoding
 
@@ -231,6 +279,6 @@ class User(JSONWizard):
         assert self.masked_cais is not None
         one_hot_encoding = np.zeros(self.max_anime_count, dtype=float)
         one_hot_encoding[self.masked_cais] = (
-            self.imputed_rating_history if imputed else self.masked_rating_history
+            self.imputed_history if imputed else self.rating_history
         )[self.mask]
         return one_hot_encoding

@@ -2,7 +2,6 @@ from abc import ABC
 import numpy as np
 
 from utils.data.data_module import DataModule
-from utils.data.testbench import TestBench
 
 
 class GenericRecommender(ABC):
@@ -10,7 +9,7 @@ class GenericRecommender(ABC):
         super().__init__()
         self.datamodule = datamodule
 
-    def train(self):
+    def train(self, *args, **kwargs):
         raise NotImplementedError("train() not implemented")
 
     def infer(self, ratings_features: np.ndarray[float], k: int) -> np.ndarray[int]:

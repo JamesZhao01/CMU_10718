@@ -41,7 +41,10 @@ class DataModule(JSONWizard):
     verbose: bool
 
     holdout_type: Literal["user", "interaction"]
-    rng: np.random.Generator = field(default_factory=np.random.default_rng(42))
+    rng: np.random.Generator = field(
+        default_factory=lambda: np.random.default_rng(42),
+        metadata={"dataclass_wizard": {"exclude": True}},
+    )
 
     user_mapping: Dict[int, User] = field(default_factory=dict)
     anime_mapping: Dict[int, Anime] = field(default_factory=dict)
@@ -70,12 +73,12 @@ class DataModule(JSONWizard):
         animes = pd.read_csv(os.path.join(self.path, "anime.csv"))
         users = pd.read_csv(os.path.join(self.path, "rating.csv"))
 
-        # Gets all the information about the animes
+        # Get all Anime Information
         anime_iterator = enumerate(animes.iterrows())
         if self.verbose:
             anime_iterator = tqdm.tqdm(
                 anime_iterator,
-                "parsing animes...",
+                "Parsing animes...",
                 total=len(animes),
             )
         for canonical_anime_id, (anime_id, anime_df) in anime_iterator:
@@ -124,20 +127,22 @@ class DataModule(JSONWizard):
                 rating=rating,
                 membership_count=membership_count,
             )
-            self.anime_mapping[anime_df["anime_id"]] = anime
+            anime_id = anime_df["anime_id"]
+            self.anime_mapping[anime_id] = anime
             self.canonical_anime_mapping[canonical_anime_id] = anime
-            self.anime_id_to_caid[anime_df["anime_id"]] = canonical_anime_id
-            self.caid_to_anime_id[canonical_anime_id] = anime_df["anime_id"]
+            self.anime_id_to_caid[anime_id] = canonical_anime_id
+            self.caid_to_anime_id[canonical_anime_id] = anime_id
         masking_set = np.zeros(max(self.anime_mapping.keys()) + 1, dtype=bool)
         masking_set[list(self.anime_mapping.keys())] = True
+        self.max_anime_count = len(self.anime_mapping)
 
-        # Gets all the user watch history
+        # Gets all User Information
         user_iterator = users.groupby("user_id", sort=True)
         if self.verbose:
             user_iterator = tqdm.tqdm(
                 user_iterator,
-                "parsing users...",
-                total=user_iterator.count(),
+                desc="Parsing users...",
+                total=user_iterator.ngroups,
             )
         next_canonical_user_id = 0
         for user_id, user_df in user_iterator:
@@ -169,7 +174,8 @@ class DataModule(JSONWizard):
                         self.anime_mapping[anime_id].rating if rating == -1 else rating
                     )
             enough_watch_history = (
-                np.count_nonzero(filtered_watch_history) >= self.threshold_watch_history
+                np.count_nonzero(filtered_watch_history)
+                >= self.thresholded_watch_history
             )
 
             # If not enough history, exclude user
@@ -185,35 +191,31 @@ class DataModule(JSONWizard):
                 imputed_history=np.array(imputed_rating_history),
                 k=self.k,
                 max_anime_count=self.max_anime_count,
-                lazy_store=False,
+                lazy_store=True,
             )
             self.user_mapping[user.id] = user
             self.canonical_user_mapping[user.cuid] = user
             self.user_id_to_cuid[user.id] = user.cuid
             self.cuid_to_user_id[user.cuid] = user.id
-
-        self.max_anime_count = len(self.anime_mapping)
         self.max_user_count = len(self.user_mapping)
-        self.cuids = range(self.max_user_count)
+        self.cuids = list(range(self.max_user_count))
+        train_size = int(0.9 * len(self.cuids))
+        self.train_cuids = self.cuids[:train_size]
+        self.test_cuids = self.cuids[train_size:]
 
         if self.holdout_type == "user":
-            train_size = int(0.8 * len(self.user_ids))
-            val_size = int(0.1 * len(self.user_ids))
-
-            self.train_cuids = self.cuids[:train_size]
-            self.val_cuids = self.cuids[train_size : train_size + val_size]
-            self.test_cuids = self.cuids[train_size + val_size :]
+            pass
         elif self.holdout_type == "interaction":
-            self.train_cuids = self.cuids
-            self.val_cuids = []
-            self.test_cuids = []
+            for cuid in tqdm.tqdm(self.train_cuids, desc="Resetting Train to k=0 ..."):
+                user = self.canonical_user_mapping[cuid]
+                user.k = 0
+                user.reshuffle()
+                user.reseed()
 
         if self.verbose:
-            data_hash = hashlib.md5(
-                json.dumps(self.user_ids).encode("utf-8")
-            ).hexdigest()
+            data_hash = hashlib.md5(json.dumps(self.cuids).encode("utf-8")).hexdigest()
             print(
-                f"Number of Users: {len(self.user_ids)}, Hash[:8]: {data_hash[:6]}, Hash: {data_hash}"
+                f"Number of Users: {len(self.cuids)}, Hash[:8]: {data_hash[:6]}, Hash: {data_hash}"
             )
             print(
                 f"Total Animes: {self.max_anime_count}, Total Users: {self.max_user_count}"

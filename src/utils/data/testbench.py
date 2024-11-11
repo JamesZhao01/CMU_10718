@@ -24,6 +24,8 @@ For Two-Tower models, models will need to made agnostic to user embeddings
 """
 
 import time
+from datetime import datetime
+import tqdm
 
 import numpy as np
 from sklearn.metrics import ndcg_score
@@ -40,6 +42,11 @@ class TestBench:
         self.n_test = len(self.data_module.test_cuids)
         self.n_anime = self.data_module.max_anime_count
 
+    def batch_iterator(self, data, batch_size: int):
+        n = len(data)
+        for i in range(0, n, batch_size):
+            yield data[i : min(i + batch_size, n)]
+
     def get_preserved_feature_tensor(self) -> np.ndarray[float]:
         """_summary_
 
@@ -48,7 +55,9 @@ class TestBench:
         """
         preserved_histories = [
             self.data_module.canonical_user_mapping[cuid].get_preserved_features()
-            for cuid in self.data_module.test_cuids
+            for cuid in tqdm.tqdm(
+                self.data_module.test_cuids, desc="Preserved Features"
+            )
         ]
         arr = np.vstack(preserved_histories)
         assert arr.shape == (self.n_test, self.n_anime)
@@ -60,19 +69,19 @@ class TestBench:
         Returns:
             np.ndarray[float]: _description_
         """
-        preserved_histories = [
+        masked_features = [
             self.data_module.canonical_user_mapping[cuid].get_masked_features(
                 imputed=True
             )
             for cuid in self.data_module.test_cuids
         ]
-        arr = np.vstack(preserved_histories)
+        arr = np.vstack(masked_features)
         assert arr.shape == (self.n_test, self.n_anime)
         return arr
 
     def get_masked_top_k_tensor(self) -> np.ndarray[int]:
         k_predictions = np.zeros((self.n_test, self.k), dtype=int)
-        for cuid in self.data_module.cuids:
+        for cuid in self.data_module.test_cuids:
             user = self.data_module.canonical_user_mapping[id]
             ground_truth_of_masked_history = user.get_masked_features(imputed=True)
             ids = np.nonzero(ground_truth_of_masked_history)[0]
@@ -91,8 +100,10 @@ class TestBench:
         - k: number of anime recommendations your model should present
         """
 
-        self.start_time = time.time()
         user_preserved_watch_history = self.get_preserved_feature_tensor()
+        self.start_time = time.time()
+        str_time = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"Start Time: {str_time}")
         return user_preserved_watch_history, self.k
 
     def calculate_ndcg(self, k_recommended_shows: np.ndarray[int]):
@@ -117,6 +128,9 @@ class TestBench:
         if is_anime_id is true, then each row of k_recommended_shows should be a list of anime ids,
             in ranked order
         """
+        end_time = time.time()
+        str_time = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"End Time: {str_time}")
         total_runtime = time.time() - self.start_time
         score = self.calculate_ndcg(k_recommended_shows)
 
@@ -127,12 +141,13 @@ class TestBench:
     def full_evaluation(self, recommender: GenericRecommender):
         preserved_features, k = self.start_eval_test_set()
         k_recommended_shows = recommender.infer(preserved_features, k)
+        assert k_recommended_shows.shape == (self.n_test, k)
         total_runtime, score = self.end_eval_test_set(k_recommended_shows)
 
         return {
             "total_runtime": total_runtime,
             "score": score,
+            "k": k,
             "k_recommended_shows": k_recommended_shows,
             "preserved_features": preserved_features,
-            "k": k,
         }

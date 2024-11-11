@@ -10,3 +10,4 @@ scipy
 jinja2
 torch
 implicit
+dataclass-wizard
