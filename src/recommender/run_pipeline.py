@@ -4,15 +4,15 @@ import json
 import numpy as np
 from enum import Enum
 
-from recommender.popularity_recommender.popularity_recommender import (
-    PopularityRecommender,
-)
+from recommender.popularity_recommender import PopularityRecommender
+from recommender.jaccard_recommender import JaccardRecommender
 from utils.data.data_module import DataModule
 from utils.data.testbench import TestBench
 
 
 class Models(Enum):
     POPULARITY = PopularityRecommender
+    JACCARD = JaccardRecommender
 
     @classmethod
     def from_string(cls, name):
@@ -22,16 +22,10 @@ class Models(Enum):
             raise ValueError(f"No Model with name '{name}'")
 
 
-MODELS = ["popularity_recommender"]
-
-
 def main(args: dict):
     dataset_config = {}
     model_config = {}
     output_dir = args["output_dir"]
-    if args["load_blob"]:
-        with open(args["load_blob"], "r") as f:
-            dataset_config = json.load(f)
     if args["dataset_config"]:
         with open(args["dataset_config"], "r") as f:
             dataset_config_2 = json.load(f)
@@ -58,7 +52,6 @@ def main(args: dict):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--load_blob", type=str, default="")
     parser.add_argument("--dataset_config", type=str, default="")
     parser.add_argument("--model_config", type=str, default="")
     parser.add_argument(

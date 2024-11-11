@@ -136,11 +136,11 @@ class TestBench:
         total_community_count = 0
         recommended = set()
         for row_of_watch_history in k_recommended_shows:
-            for id in row_of_watch_history:
-                anime: Anime = self.canonical_anime_mapping[id]
-                if id not in recommended:
+            for caid in row_of_watch_history:
+                anime: Anime = self.data_module.canonical_anime_mapping[caid]
+                if caid not in recommended:
                     total_community_count += math.log(anime.membership_count)
-                    recommended.add(id)
+                    recommended.add(caid)
         return total_community_count
 
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
@@ -157,21 +157,28 @@ class TestBench:
         str_time = datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
         print(f"End Time: {str_time}")
         total_runtime = time.time() - self.start_time
-        score = self.calculate_ndcg(k_recommended_shows)
+        ndcg_score = self.calculate_ndcg(k_recommended_shows)
+        diversity_score = self.calculate_diversity_by_community_count(
+            k_recommended_shows
+        )
 
         print(f"This model took {total_runtime:0.4f} seconds.")
-        print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
-        return total_runtime, score
+        print(f"Out of an optimal score of 1.0, you scored {ndcg_score:0.4f}.")
+        print(f"Your DEI score is {diversity_score:0.4f}.")
+        return total_runtime, ndcg_score, diversity_score
 
     def full_evaluation(self, recommender: GenericRecommender):
         preserved_features, k = self.start_eval_test_set()
         k_recommended_shows = recommender.infer(preserved_features, k)
         assert k_recommended_shows.shape == (self.n_test, k)
-        total_runtime, score = self.end_eval_test_set(k_recommended_shows)
+        total_runtime, score, diversity_score = self.end_eval_test_set(
+            k_recommended_shows
+        )
 
         return {
             "total_runtime": total_runtime,
             "score": score,
+            "diversity_score": diversity_score,
             "k": k,
             "k_recommended_shows": k_recommended_shows,
             "preserved_features": preserved_features,

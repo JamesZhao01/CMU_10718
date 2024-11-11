@@ -1,0 +1,8 @@
+{
+  "sim_martix_normalization": "row",
+  "sim_threshold": 0.0,
+  "do_weighted_average": false,
+  "normalizing_clip": 0.0,
+  "normalizing_reg": 0.0,
+  "score_reg": 0.0
+}

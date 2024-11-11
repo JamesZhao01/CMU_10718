@@ -3,8 +3,8 @@ import numpy as np
 
 
 class PopularityRecommender(GenericRecommender):
-    def __init__(self, data_module, popularity_mode="membership_count"):
-        super().__init__(data_module)
+    def __init__(self, datamodule, popularity_mode="membership_count"):
+        super().__init__(datamodule)
         self.popularity_mode = popularity_mode
 
     def train(self):
