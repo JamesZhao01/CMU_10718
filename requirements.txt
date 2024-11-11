@@ -8,3 +8,6 @@ scikit-metrics
 scikit-learn
 scipy
 jinja2
+torch
+implicit
+dataclass-wizard

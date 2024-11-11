@@ -16,19 +16,27 @@ class JaccardRecommender:
         normalize_unrated=False,
         thresholded_watch_history=20,
         true_weighted_average=False,
-        sim_matrix_normalization="row",
+        sim_matrix_normalization="row", # normalization method
+        sim_threshold=0.0, # lower bound for similarity to be considered
+        normalizing_constant_clip=0, # lower bound for normalization constant
+        normalizing_constant_regularization = 0, # constant added to normalizing constants
+        score_regularization = 0, # constant added to scores
         save=True,
+        evaluator = None,
         *args,
         **kwargs,
     ):
         print(
             f"{normalize_unrated=} {thresholded_watch_history=} {true_weighted_average=} {sim_matrix_normalization=}"
         )
-        self.evaluator = Evaluator(
-            data_path,
-            normalize_unrated=normalize_unrated,
-            threshold_watch_history=thresholded_watch_history,
-        )
+        if not evaluator:
+            self.evaluator = Evaluator(
+                data_path,
+                normalize_unrated=normalize_unrated,
+                threshold_watch_history=thresholded_watch_history,
+            )
+        else:
+            self.evaluator = evaluator
         self.n_anime = len(self.evaluator.anime_mapping)
         self.n_users = len(self.evaluator.user_mapping)
 
@@ -37,6 +45,11 @@ class JaccardRecommender:
         self.sim_matrix_normalization = sim_matrix_normalization
         self.true_weighted_average = true_weighted_average
         self.save = save
+        
+        self.sim_threshold = sim_threshold
+        self.normalizing_constant_clip = normalizing_constant_clip
+        self.normalizing_constant_regularization = normalizing_constant_regularization
+        self.score_regularization = score_regularization
 
         os.makedirs(output_dir, exist_ok=True)
 
@@ -77,12 +90,9 @@ class JaccardRecommender:
         assert ratings_mask.shape == scores.shape == ratings_tensor.shape
         if self.true_weighted_average:
             # (n, n) x (n, t) -> (n, t)
-            normalizing_constants = self.sim_matrix @ ratings_mask
-            normalizing_constants = np.where(
-                normalizing_constants == 0, 1, normalizing_constants
-            )
-            assert scores.shape == normalizing_constants.shape
-            scores = scores / normalizing_constants
+            normalizing_constants = self.sim_matrix @ ratings_mask + self.normalizing_constant_regularization
+            normalizing_constants = normalizing_constants.clip(min=self.normalizing_constant_clip)
+            scores = (scores + self.score_regularization) / normalizing_constants
         scores = np.where(ratings_mask, -float("inf"), scores)
         order = np.argsort(-scores, axis=0)
         results = order[:k].T
@@ -101,8 +111,11 @@ class JaccardRecommender:
             self.sim_matrix /= np.sum(self.sim_matrix)
         else:
             pass
+        # apply similarity thresholding
+        self.sim_matrix = np.where(self.sim_matrix < self.sim_threshold, 0, self.sim_matrix)
 
         # Perform recommendations
         ratings_tensor, k = self.evaluator.start_eval_test_set()
+        self.rating_tensor = ratings_tensor
         self.k_recommended_shows = self.bulk_recommend(ratings_tensor.T, k)
         return self.evaluator.end_eval_test_set(self.k_recommended_shows)
