@@ -22,9 +22,11 @@
   "lr": 1e-3,
   "epochs": 10,
   "batch_size": 32,
-  "dataset_args": {},
-  "save_to": "",
+  "dataset_args": {
+    "shuffle": true
+  },
   "load_from": "",
-  "user_histories": false,
-  "device": "cuda"
+  "save_to": "",
+  "use_histories": false,
+  "device": "cpu"
 }

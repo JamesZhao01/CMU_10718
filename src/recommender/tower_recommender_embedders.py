@@ -21,7 +21,7 @@ def collate_item_feature(
     features: Tuple[torch.Tensor], item_embedder: List[Tuple[str, dict]]
 ):
     collated_features = []
-    for (feature_name, feature_metadata), feature in zip(item_embedder, features):
+    for (feature_name, feature_metadata), feature in zip(item_embedder, zip(*features)):
         assembled_feature = None
         match feature_name:
             case ItemEmbedders.ID_EMBEDDING.value:
@@ -36,7 +36,7 @@ def collate_user_feature(
     features: Tuple[torch.Tensor], user_embedder: List[Tuple[str, dict]]
 ):
     collated_features = []
-    for (feature_name, feature_metadata), feature in zip(user_embedder, features):
+    for (feature_name, feature_metadata), feature in zip(user_embedder, zip(*features)):
         assembled_feature = None
         match feature_name:
             case UserEmbedders.USER_EMBEDDING.value:
@@ -99,7 +99,7 @@ def build_user_embedder(
 
 
 def build_item_embedder(
-    self, embedder_type: str, embedder_metadata: dict, n_anime: int, **kwargs
+    embedder_type: str, embedder_metadata: dict, n_anime: int, **kwargs
 ):
     match embedder_type:
         case ItemEmbedders.ID_EMBEDDING.value:

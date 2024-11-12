@@ -41,9 +41,9 @@ class TestBench:
         self.datamodule = datamodule
         self.should_return_ids = should_return_ids
 
-        self.k = data_module.k
-        self.n_test = len(self.data_module.test_cuids)
-        self.n_anime = self.data_module.max_anime_count
+        self.k = self.datamodule.k
+        self.n_test = len(self.datamodule.test_cuids)
+        self.n_anime = self.datamodule.max_anime_count
 
     def batch_iterator(self, data, batch_size: int):
         n = len(data)

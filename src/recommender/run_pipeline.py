@@ -6,6 +6,7 @@ from enum import Enum
 
 from recommender.popularity_recommender import PopularityRecommender
 from recommender.jaccard_recommender import JaccardRecommender
+from recommender.tower_recommender import TowerRecommender
 from utils.data.data_module import DataModule
 from utils.data.testbench import TestBench
 
@@ -13,6 +14,7 @@ from utils.data.testbench import TestBench
 class Models(Enum):
     POPULARITY = PopularityRecommender
     JACCARD = JaccardRecommender
+    TOWER = TowerRecommender
 
     @classmethod
     def from_string(cls, name):
@@ -37,7 +39,12 @@ def main(args: dict):
     os.makedirs(output_dir, exist_ok=True)
     datamodule = DataModule(**dataset_config)
 
-    testbench = TestBench(datamodule)
+    testbench = TestBench(datamodule, **dataset_config)
+    auxiliary_args = {
+        "n_users": datamodule.max_user_count,
+        "n_anime": datamodule.max_anime_count,
+    }
+    model_config = model_config + auxiliary_args
     model = Models.from_string(args["model"])(data_module=datamodule, **model_config)
 
     model.train()

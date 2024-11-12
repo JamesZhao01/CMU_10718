@@ -31,7 +31,5 @@ Michael is big dum dum
 # Running Pipeline V2
 
 ```bash
-$env:PYTHONPATH="src"; python ./src/recommender/run_pipeline.py --dataset_config
-    configs/popularity/dataset.json --model_config configs/popularity/model.json
-    --model POPULARITY --output_dir "models/popularity"
+$env:PYTHONPATH="src"; python ./src/recommender/run_pipeline.py --dataset_config configs/popularity/dataset.json --model_config configs/popularity/model.json --model POPULARITY --output_dir "models/popularity"
 ```

@@ -14,6 +14,7 @@ from recommender.generic_recommender import GenericRecommender
 from utils.data.data_classes import Anime, User
 from utils.data.data_module import DataModule
 from recommender.tower_recommender_embedders import (
+    collate_item_feature,
     user_pos_neg_collator,
     item_collator,
     featurize_item_or_items,
@@ -59,10 +60,10 @@ class TowerRecommender(GenericRecommender):
         self.lr = lr
         self.epochs = epochs
         self.batch_size = batch_size
-        self.device = device
         self.load_from = load_from
         self.save_to = save_to
         self.use_histories = use_histories
+        self.device = device
 
         self.model = TowerModel(
             n_users=n_users,
@@ -101,7 +102,8 @@ class TowerRecommender(GenericRecommender):
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
 
     def train(self, *args, **kwargs):
-        self.model.train()
+        if self.load_from:
+            print(f"Skipping training because model is loaded...")
         losses = []
         epoch_losses = []
         for epoch in tqdm.tqdm(range(self.epochs), desc="Epochs..."):
@@ -113,7 +115,8 @@ class TowerRecommender(GenericRecommender):
                 negative = negative.to(self.device)
 
                 self.optimizer.zero_grad()
-                loss = self.model.train(user, positive, negative)
+                self.model.train()
+                loss = self.model.train_step(user, positive, negative)
                 loss.backward()
                 self.optimizer.step()
                 loss_item = loss.item()
@@ -143,13 +146,55 @@ class TowerRecommender(GenericRecommender):
         Returns:
             np.ndarray[int]: tensor of size (n_test, n_anime)
         """
+
+        def batchify(data, batch_size):
+            n = len(data)
+            for i in range(0, n, batch_size):
+                yield data[i : min(i + batch_size, n)]
+
         self.model.eval()
         with torch.no_grad():
             users, histories = features
-            users = torch.tensor(users).to(self.device)
-            user_embeddings = self.model.embed_user(users)
+            users, histories = torch.from_numpy(users), torch.from_numpy(histories)
+            user_features = [
+                featurize_singular_user(user, history, self.user_embedder)
+                for user, history in zip(users, histories)
+            ]
+            user_embeddings = []
+            for batch in batchify(user_features, self.batch_size):
+                collated_user_features = collated_user_features(
+                    batch, self.user_embedder
+                )
+                collated_user_features = (
+                    feature.to(self.device) for feature in collated_user_features
+                )
+                batch_user_embedding = self.model.embed_user(users)
+                user_embeddings.append(batch_user_embedding)
+            user_embeddings = torch.vstack(user_embeddings).cpu()
 
-            # TODO James
+            anime_embeddings = []
+            for batch in self.anime_dataloader:
+                collated_anime_features = collate_item_feature(
+                    batch, self.item_embedder
+                )
+                collated_anime_features = (
+                    feature.to(self.device) for feature in collated_anime_features
+                )
+                batch_anime_embedding = self.model.embed_feats(batch)
+                anime_embeddings.append(batch_anime_embedding)
+            anime_embeddings = torch.vstack(anime_embeddings).cpu()
+
+        user_interaction_mask = np.zeros((len(users), self.n_anime)).int()
+        for i, (user, history) in enumerate(zip(users, histories)):
+            user_interaction_mask[i, history] = 1
+        user_embeddings = user_embeddings[:, :, None]
+        anime_embeddings = anime_embeddings.T[None, :, :]
+        scores = torch.cosine_similarity(user_embeddings, anime_embeddings, dim=1)
+        scores[user_interaction_mask] = -torch.inf
+        shows = torch.argsort(scores, dim=1, descending=True)
+        recommended = shows[:, :k].numpy()
+
+        return recommended
 
 
 class AnimeEnumerator(data.Dataset):
@@ -163,11 +208,10 @@ class AnimeEnumerator(data.Dataset):
 
     def __getitem__(self, idx):
         anime = self.datamodule.canonical_anime_mapping[idx]
-        pos_feature = [
-            DatasetWrapper.articulate_animes(anime, embedder)
-            for embedder in self.item_embedder
+
+        return [
+            featurize_item_or_items(anime, embedder) for embedder in self.item_embedder
         ]
-        return DatasetWrapper.articulate_animes(anime, self.item_embedder)
 
 
 class DatasetWrapper(data.Dataset):
@@ -201,13 +245,13 @@ class DatasetWrapper(data.Dataset):
             self.datamodule.canonical_anime_mapping[anime] for anime in negatives
         ]
 
-        user_feature = self.articulate_user(user, history, self.user_embedder)
+        user_feature = featurize_singular_user(user, history, self.user_embedder)
         pos_feature = [
-            DatasetWrapper.articulate_animes(positives, embedder)
+            featurize_item_or_items(positives, embedder)
             for embedder in self.item_embedder
         ]
         neg_feature = [
-            DatasetWrapper.articulate_animes(negatives, embedder)
+            featurize_item_or_items(negatives, embedder)
             for embedder in self.item_embedder
         ]
         return user_feature, pos_feature, neg_feature
@@ -223,6 +267,7 @@ class TowerModel(nn.Module):
         item_embedder: List[Tuple[str, dict]],
         temperature: float = 1,
     ):
+        super().__init__()
         self.n_users = n_users
         self.n_anime = n_anime
         self.embedding_dimension = embedding_dimension
@@ -230,13 +275,13 @@ class TowerModel(nn.Module):
 
         self.user_embedders = torch.nn.ModuleList(
             [
-                build_user_embedder(embedder_type, embedder_metadata)
+                build_user_embedder(embedder_type, embedder_metadata, self.n_users)
                 for embedder_type, embedder_metadata in user_embedder
             ]
         )
         self.item_embedders = torch.nn.ModuleList(
             [
-                build_item_embedder(embedder_type, embedder_metadata)
+                build_item_embedder(embedder_type, embedder_metadata, self.n_anime)
                 for embedder_type, embedder_metadata in item_embedder
             ]
         )
@@ -269,7 +314,7 @@ class TowerModel(nn.Module):
 
         return user_embedding, feature_embedding
 
-    def train(
+    def train_step(
         self,
         users: torch.Tensor,
         pos_features: torch.Tensor,
