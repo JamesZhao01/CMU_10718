@@ -57,10 +57,8 @@ class TestBench:
             np.ndarray[float]: _description_
         """
         preserved_histories = [
-            self.data_module.canonical_user_mapping[cuid].get_preserved_features()
-            for cuid in tqdm.tqdm(
-                self.data_module.test_cuids, desc="Preserved Features"
-            )
+            self.datamodule.canonical_user_mapping[cuid].get_preserved_features()
+            for cuid in tqdm.tqdm(self.datamodule.test_cuids, desc="Preserved Features")
         ]
         arr = np.vstack(preserved_histories)
         assert arr.shape == (self.n_test, self.n_anime)
@@ -73,10 +71,10 @@ class TestBench:
             np.ndarray[float]: _description_
         """
         masked_features = [
-            self.data_module.canonical_user_mapping[cuid].get_masked_features(
+            self.datamodule.canonical_user_mapping[cuid].get_masked_features(
                 imputed=True
             )
-            for cuid in self.data_module.test_cuids
+            for cuid in self.datamodule.test_cuids
         ]
         arr = np.vstack(masked_features)
         assert arr.shape == (self.n_test, self.n_anime)
@@ -84,8 +82,8 @@ class TestBench:
 
     def get_masked_top_k_tensor(self) -> np.ndarray[int]:
         k_predictions = np.zeros((self.n_test, self.k), dtype=int)
-        for cuid in self.data_module.test_cuids:
-            user = self.data_module.canonical_user_mapping[id]
+        for cuid in self.datamodule.test_cuids:
+            user = self.datamodule.canonical_user_mapping[id]
             ground_truth_of_masked_history = user.get_masked_features(imputed=True)
             ids = np.nonzero(ground_truth_of_masked_history)[0]
             ratings = ground_truth_of_masked_history[ids]
@@ -109,12 +107,14 @@ class TestBench:
             user_preserved_watch_history = self.get_preserved_feature_tensor()
             to_return = user_preserved_watch_history
         else:
-            user_ids = self.data_module.test_cuids
+            user_ids = self.datamodule.test_cuids
             user_histories = [
                 self.datamodule.canonical_user_mapping[test_cuid].preserved_cais
                 for test_cuid in user_ids
             ]
-            to_return = user_ids, user_histories
+            to_return = [
+                self.datamodule.canonical_user_mapping[cuid] for cuid in user_ids
+            ], user_histories
         self.start_time = time.time()
         str_time = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S")
         print(f"Start Time: {str_time}")
@@ -149,7 +149,7 @@ class TestBench:
         recommended = set()
         for row_of_watch_history in k_recommended_shows:
             for caid in row_of_watch_history:
-                anime: Anime = self.data_module.canonical_anime_mapping[caid]
+                anime: Anime = self.datamodule.canonical_anime_mapping[caid]
                 if caid not in recommended:
                     total_community_count += math.log(anime.membership_count)
                     recommended.add(caid)
@@ -181,7 +181,7 @@ class TestBench:
 
     def full_evaluation(self, recommender: GenericRecommender):
         preserved_features, k = self.start_eval_test_set()
-        k_recommended_shows = recommender.infer(preserved_features, k)
+        scores, k_recommended_shows = recommender.infer(preserved_features, k)
         assert k_recommended_shows.shape == (self.n_test, k)
         total_runtime, score, diversity_score = self.end_eval_test_set(
             k_recommended_shows
@@ -194,4 +194,5 @@ class TestBench:
             "k": k,
             "k_recommended_shows": k_recommended_shows,
             "preserved_features": preserved_features,
+            "scores": scores,
         }

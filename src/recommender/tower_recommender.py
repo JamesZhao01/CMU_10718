@@ -1,4 +1,5 @@
 from abc import ABC
+from collections import defaultdict
 from enum import Enum
 from typing import List, Literal, Tuple
 
@@ -14,6 +15,7 @@ from recommender.generic_recommender import GenericRecommender
 from utils.data.data_classes import Anime, User
 from utils.data.data_module import DataModule
 from recommender.tower_recommender_embedders import (
+    collate_user_feature,
     collate_item_feature,
     user_pos_neg_collator,
     item_collator,
@@ -74,7 +76,7 @@ class TowerRecommender(GenericRecommender):
             temperature=temperature,
         ).to(self.device)
         if self.load_from:
-            self.model.load_state_dict(torch.load(self.load_from))
+            self.model.load_state_dict(torch.load(self.load_from, weights_only=True))
         self.dataset = DatasetWrapper(
             datamodule=datamodule,
             user_embedder=user_embedder,
@@ -104,9 +106,10 @@ class TowerRecommender(GenericRecommender):
     def train(self, *args, **kwargs):
         if self.load_from:
             print(f"Skipping training because model is loaded...")
+            return
         losses = []
         epoch_losses = []
-        display_loss = 0
+        display = defaultdict(int)
         for epoch in range(self.epochs):
             print(f"Epoch {epoch+1} / {self.epochs}")
             batch_iterator = tqdm.tqdm(
@@ -123,12 +126,21 @@ class TowerRecommender(GenericRecommender):
 
                 self.optimizer.zero_grad()
                 self.model.train()
-                loss = self.model.train_step(user, positive, negative)
+                outputs = self.model.train_step(user, positive, negative)
+                loss = outputs["loss"]
                 loss.backward()
                 self.optimizer.step()
                 loss_item = loss.item()
-                display_loss = 0.8 * display_loss + 0.2 * loss_item
-                batch_iterator.set_description(f"Loss: {display_loss:.4f}")
+                pos_term_item = outputs["positive_term"]
+                neg_term_item = outputs["negative_term"]
+
+                display["loss"] = display["loss"] * 0.8 + loss_item * 0.2
+                display["pos_term"] = display["pos_term"] * 0.8 + pos_term_item * 0.2
+                display["neg_term"] = display["neg_term"] * 0.8 + neg_term_item * 0.2
+
+                batch_iterator.set_description(
+                    f"L:{display['loss']:.3f}, +:{display['pos_term']:.3f}, -:{display['neg_term']:.3f}"
+                )
                 losses.append(loss_item)
                 epoch_loss = (epoch_loss * n + loss_item) / (n + batch_size)
                 n += batch_size
@@ -163,46 +175,55 @@ class TowerRecommender(GenericRecommender):
         self.model.eval()
         with torch.no_grad():
             users, histories = features
-            users, histories = torch.from_numpy(users), torch.from_numpy(histories)
+            users: List[User]
+            histories: List[List[int]]
             user_features = [
-                featurize_singular_user(user, history, self.user_embedder)
+                [
+                    featurize_singular_user(user, history, embedder)
+                    for embedder in self.user_embedder
+                ]
                 for user, history in zip(users, histories)
             ]
+
             user_embeddings = []
-            for batch in batchify(user_features, self.batch_size):
-                collated_user_features = collated_user_features(
-                    batch, self.user_embedder
-                )
-                collated_user_features = (
+            for batch in tqdm.tqdm(
+                batchify(user_features, self.batch_size), desc="User Embeddings..."
+            ):
+                collated_user_features = collate_user_feature(batch, self.user_embedder)
+                collated_user_features = [
                     feature.to(self.device) for feature in collated_user_features
-                )
-                batch_user_embedding = self.model.embed_user(users)
+                ]
+                batch_user_embedding = self.model.embed_user(collated_user_features)
                 user_embeddings.append(batch_user_embedding)
-            user_embeddings = torch.vstack(user_embeddings).cpu()
+            user_embeddings = torch.vstack(user_embeddings)
 
             anime_embeddings = []
-            for batch in self.anime_dataloader:
-                collated_anime_features = collate_item_feature(
-                    batch, self.item_embedder
-                )
-                collated_anime_features = (
-                    feature.to(self.device) for feature in collated_anime_features
-                )
-                batch_anime_embedding = self.model.embed_feats(batch)
+            for batch in tqdm.tqdm(self.anime_dataloader, desc="Anime Embeddings..."):
+                collated_anime_features = [feature.to(self.device) for feature in batch]
+                batch_anime_embedding = self.model.embed_feats(collated_anime_features)
                 anime_embeddings.append(batch_anime_embedding)
-            anime_embeddings = torch.vstack(anime_embeddings).cpu()
+            anime_embeddings = torch.vstack(anime_embeddings)
 
-        user_interaction_mask = np.zeros((len(users), self.n_anime)).int()
-        for i, (user, history) in enumerate(zip(users, histories)):
-            user_interaction_mask[i, history] = 1
-        user_embeddings = user_embeddings[:, :, None]
-        anime_embeddings = anime_embeddings.T[None, :, :]
-        scores = torch.cosine_similarity(user_embeddings, anime_embeddings, dim=1)
-        scores[user_interaction_mask] = -torch.inf
-        shows = torch.argsort(scores, dim=1, descending=True)
-        recommended = shows[:, :k].numpy()
-
-        return recommended
+            user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=np.int32)
+            for i, (user, history) in enumerate(zip(users, histories)):
+                user_interaction_mask[i, history] = 1
+            # (n, 1, dim) -> (n, dim, 1)
+            user_embeddings = user_embeddings.permute(0, 2, 1).detach().cpu().numpy()
+            # -> (n, dim)
+            user_embeddings = np.squeeze(user_embeddings, axis=2)
+            # (a, 1, dim) -> (1, dim, a)
+            anime_embeddings = anime_embeddings.permute(1, 2, 0).detach().cpu().numpy()
+            # -> (dim, a)
+            anime_embeddings = np.squeeze(anime_embeddings, axis=0)
+            # (n, dim, 1) x (1, dim, a) -> (n, a)
+            print(f"{user_embeddings.shape=} {anime_embeddings.shape=}")
+            print(f"Commence God Operation")
+            scores = user_embeddings @ anime_embeddings
+            scores[user_interaction_mask] = -np.inf
+            print(f"Commence Big Sort Energy")
+            shows = np.argsort(-scores, axis=1)
+            k_recommended = shows[:, :k]
+            return scores, k_recommended
 
 
 class AnimeEnumerator(data.Dataset):
@@ -331,30 +352,59 @@ class TowerModel(nn.Module):
         pos_features: Tuple[torch.Tensor],
         neg_features: Tuple[torch.Tensor],
     ):
-        user_embedding = self.embed_user(users)
-        pos_feature_embedding = self.embed_feats(pos_features)
-        neg_feature_embedding = self.embed_feats(neg_features)
-        print(
-            f"{user_embedding.shape=} / {pos_feature_embedding.shape=} / {neg_feature_embedding.shape=}"
-        )
+        user_embedding = self.embed_user(users)  # (b_s, 1, dim)
+
+        pos_feature_embedding = self.embed_feats(pos_features)  # (b_s, n_pos, dim)
+        neg_feature_embedding = self.embed_feats(neg_features)  # (b_s, n_neg, dim)
+
+        # if torch.rand(1).item() < 0.1:
+        #     print("=" * 20)
+        #     print("user", users[0][:5, :5])
+        #     print("pos", pos_features[0][:5, :5])
+        #     print("neg", neg_features[0][:5, :5])
         negative_cos_sim = (
-            torch.cosine_similarity(user_embedding, pos_feature_embedding, dim=-1)
+            torch.linalg.vecdot(user_embedding, pos_feature_embedding, dim=-1)
             / self.temperature
         )
         positive_cos_sim = (
-            torch.cosine_similarity(user_embedding, neg_feature_embedding, dim=-1)
+            torch.linalg.vecdot(user_embedding, neg_feature_embedding, dim=-1)
             / self.temperature
         )
-        print(
-            f"{user_embedding.shape=} / {pos_feature_embedding.shape=} / {neg_feature_embedding.shape=}"
-        )
-        negative_cos_sim_exp = torch.exp(negative_cos_sim)
-        positive_cos_sim_exp = torch.exp(positive_cos_sim)
+        # assert negative_cos_sim.shape == (b_s,)
+        # if torch.rand(1).item() < 0.1:
+        #     print(
+        #         f"{user_embedding.shape=} / {pos_feature_embedding.shape=} / {neg_feature_embedding.shape=}"
+        #     )
+        #     # print(f"{user_embedding[:5, :5]=}")
+        #     # print(f"{pos_feature_embedding[:5, :5]=}")
+        #     print(
+        #         f"{negative_cos_sim.mean().item()=} / {positive_cos_sim.mean().item()=}"
+        #     )
 
-        pos_term = positive_cos_sim_exp.sum(dim=1)
-        neg_term = negative_cos_sim_exp.sum(dim=1)
-        print(f"{pos_term.mean().item()=} / {pos_term.mean().item()=}")
+        # BCE
+        data = torch.cat([positive_cos_sim, negative_cos_sim], dim=1)
+        labels = torch.cat(
+            [torch.ones_like(positive_cos_sim), torch.zeros_like(negative_cos_sim)],
+            dim=1,
+        ).to(user_embedding.device)
+        # print(f"{data.shape=} {data.dtype=} {data.device}")
+        # print(f"{labels.shape=} {labels.dtype=} {labels.device}")
+        # print(f"{torch.isnan(data).any()} {torch.isinf(data).any()}")
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(data, labels)
+        return {
+            "loss": loss,
+            "positive_term": positive_cos_sim.mean().item(),
+            "negative_term": negative_cos_sim.mean().item(),
+        }
 
-        loss = -torch.log(pos_term / (pos_term + neg_term)).mean()
-        print(1 / 0)
-        return loss
+        print()
+
+        # Contrastive loss
+        # negative_cos_sim_exp = torch.exp(negative_cos_sim)
+        # positive_cos_sim_exp = torch.exp(positive_cos_sim)
+
+        # pos_term = positive_cos_sim_exp.sum(dim=1)
+        # neg_term = negative_cos_sim_exp.sum(dim=1)
+
+        # loss = -torch.log(pos_term / (pos_term + neg_term)).mean()
+        # return loss

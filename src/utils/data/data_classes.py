@@ -196,7 +196,7 @@ class User(JSONWizard):
         self.mask = permutation[: self.k]
         self.preserved = permutation[self.k :]
         self.negative_cais = np.setdiff1d(
-            np.arange(self.max_anime_count), self.watch_history, assume_unique=True
+            np.arange(self.max_anime_count), self.watch_history
         )
 
         # Subsample both arrays using the selected indices
