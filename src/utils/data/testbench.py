@@ -37,8 +37,9 @@ from utils.data.data_module import DataModule
 
 
 class TestBench:
-    def __init__(self, data_module: DataModule):
-        self.data_module = data_module
+    def __init__(self, datamodule: DataModule, should_return_ids: bool = False):
+        self.datamodule = datamodule
+        self.should_return_ids = should_return_ids
 
         self.k = data_module.k
         self.n_test = len(self.data_module.test_cuids)
@@ -100,13 +101,24 @@ class TestBench:
         Returns:
         - user_preserved_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
         - k: number of anime recommendations your model should present
+
+        Can also return (user_ids, user_histories) if should_return_ids is True
         """
 
-        user_preserved_watch_history = self.get_preserved_feature_tensor()
+        if not self.should_return_ids:
+            user_preserved_watch_history = self.get_preserved_feature_tensor()
+            to_return = user_preserved_watch_history
+        else:
+            user_ids = self.data_module.test_cuids
+            user_histories = [
+                self.datamodule.canonical_user_mapping[test_cuid].preserved_cais
+                for test_cuid in user_ids
+            ]
+            to_return = user_ids, user_histories
         self.start_time = time.time()
         str_time = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S")
         print(f"Start Time: {str_time}")
-        return user_preserved_watch_history, self.k
+        return to_return, self.k
 
     def calculate_ndcg(self, k_recommended_shows: np.ndarray[int]):
         masked_feature_ground_truth_scores = self.get_masked_feature_tensor()

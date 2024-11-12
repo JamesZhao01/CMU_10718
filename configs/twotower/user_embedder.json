@@ -1,0 +1,30 @@
+{
+  "embedding_dimension": 512,
+  "user_embedder": [
+    [
+      "user_embedding",
+      {
+        "embedding_dimension": 512
+      }
+    ]
+  ],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 512
+      }
+    ]
+  ],
+  "temperature": 1,
+  "n_pos": 10,
+  "n_neg": 10,
+  "lr": 1e-3,
+  "epochs": 10,
+  "batch_size": 32,
+  "dataset_args": {},
+  "save_to": "",
+  "load_from": "",
+  "user_histories": false,
+  "device": "cuda"
+}
