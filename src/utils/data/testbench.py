@@ -107,14 +107,15 @@ class TestBench:
             user_preserved_watch_history = self.get_preserved_feature_tensor()
             to_return = user_preserved_watch_history
         else:
-            user_ids = self.datamodule.test_cuids
+            users = [
+                self.datamodule.canonical_user_mapping[test_cuid]
+                for test_cuid in self.datamodule.test_cuids
+            ]
             user_histories = [
                 self.datamodule.canonical_user_mapping[test_cuid].preserved_cais
-                for test_cuid in user_ids
+                for test_cuid in self.datamodule.test_cuids
             ]
-            to_return = [
-                self.datamodule.canonical_user_mapping[cuid] for cuid in user_ids
-            ], user_histories
+            to_return = users, user_histories
         self.start_time = time.time()
         str_time = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S")
         print(f"Start Time: {str_time}")
@@ -155,6 +156,27 @@ class TestBench:
                     recommended.add(caid)
         return total_community_count
 
+    def pseudo_iou(self, k_recommended_shows: np.ndarray[int]):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count,
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+        recommended = set()
+        total_posssible = k_recommended_shows.shape[0] * k_recommended_shows.shape[1]
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                if id not in recommended:
+                    recommended.add(id)
+        ##count elements in recommended
+        total_num = len(recommended)
+        score = total_num / total_posssible
+        return score
+
     def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
         """
         Run this method to end the evaluation program.
@@ -173,25 +195,26 @@ class TestBench:
         diversity_score = self.calculate_diversity_by_community_count(
             k_recommended_shows
         )
+        pseudo_iou = self.pseudo_iou(k_recommended_shows)
 
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {ndcg_score:0.4f}.")
         print(f"Your DEI score is {diversity_score:0.4f}.")
-        return total_runtime, ndcg_score, diversity_score
+        print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
+        return {
+            "total runtime": total_runtime,
+            "ndcg": ndcg_score,
+            "diversity_score": diversity_score,
+            "pseudo_iou": pseudo_iou,
+        }
 
     def full_evaluation(self, recommender: GenericRecommender):
         preserved_features, k = self.start_eval_test_set()
         scores, k_recommended_shows = recommender.infer(preserved_features, k)
         assert k_recommended_shows.shape == (self.n_test, k)
-        total_runtime, score, diversity_score = self.end_eval_test_set(
-            k_recommended_shows
-        )
+        results = self.end_eval_test_set(k_recommended_shows)
 
-        return {
-            "total_runtime": total_runtime,
-            "score": score,
-            "diversity_score": diversity_score,
-            "k": k,
+        return results | {
             "k_recommended_shows": k_recommended_shows,
             "preserved_features": preserved_features,
             "scores": scores,

@@ -38,6 +38,8 @@ class TowerRecommender(GenericRecommender):
         temperature: float = 1,
         n_pos: int = 10,
         n_neg: int = 10,
+        loss="bce",  # bce, info_nce, contrastive
+        sim="cosine",  # cosine, dot
         lr=1e-3,
         epochs=10,
         batch_size=32,
@@ -58,6 +60,8 @@ class TowerRecommender(GenericRecommender):
         self.temperature = temperature
         self.n_pos = n_pos
         self.n_neg = n_neg
+        self.loss = loss
+        self.sim = sim
 
         self.lr = lr
         self.epochs = epochs
@@ -74,6 +78,8 @@ class TowerRecommender(GenericRecommender):
             user_embedder=user_embedder,
             item_embedder=item_embedder,
             temperature=temperature,
+            loss=loss,
+            sim=sim,
         ).to(self.device)
         if self.load_from:
             self.model.load_state_dict(torch.load(self.load_from, weights_only=True))
@@ -204,9 +210,9 @@ class TowerRecommender(GenericRecommender):
                 anime_embeddings.append(batch_anime_embedding)
             anime_embeddings = torch.vstack(anime_embeddings)
 
-            user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=np.int32)
-            for i, (user, history) in enumerate(zip(users, histories)):
-                user_interaction_mask[i, history] = 1
+            # user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=bool)
+            # for i, (user, history) in enumerate(zip(users, histories)):
+            #     user_interaction_mask[i, history] = True
             # (n, 1, dim) -> (n, dim, 1)
             user_embeddings = user_embeddings.permute(0, 2, 1).detach().cpu().numpy()
             # -> (n, dim)
@@ -219,7 +225,7 @@ class TowerRecommender(GenericRecommender):
             print(f"{user_embeddings.shape=} {anime_embeddings.shape=}")
             print(f"Commence God Operation")
             scores = user_embeddings @ anime_embeddings
-            scores[user_interaction_mask] = -np.inf
+            # scores[user_interaction_mask] = -np.inf
             print(f"Commence Big Sort Energy")
             shows = np.argsort(-scores, axis=1)
             k_recommended = shows[:, :k]
@@ -298,12 +304,16 @@ class TowerModel(nn.Module):
         user_embedder: str,
         item_embedder: List[Tuple[str, dict]],
         temperature: float = 1,
+        loss: Literal["bce", "contrastive", "info_nce"] = "bce",
+        sim: Literal["cosine", "dot"] = "cosine",
     ):
         super().__init__()
         self.n_users = n_users
         self.n_anime = n_anime
         self.embedding_dimension = embedding_dimension
         self.temperature = temperature
+        self.loss = loss
+        self.sim = sim
 
         self.user_embedders = torch.nn.ModuleList(
             [
@@ -357,17 +367,20 @@ class TowerModel(nn.Module):
         pos_feature_embedding = self.embed_feats(pos_features)  # (b_s, n_pos, dim)
         neg_feature_embedding = self.embed_feats(neg_features)  # (b_s, n_neg, dim)
 
-        # if torch.rand(1).item() < 0.1:
-        #     print("=" * 20)
-        #     print("user", users[0][:5, :5])
-        #     print("pos", pos_features[0][:5, :5])
-        #     print("neg", neg_features[0][:5, :5])
-        negative_cos_sim = (
-            torch.linalg.vecdot(user_embedding, pos_feature_embedding, dim=-1)
+        if self.sim == "cosine":
+            pos_feature_embedding = pos_feature_embedding / torch.linalg.norm(
+                pos_feature_embedding, dim=-1, keepdim=True, ord=2
+            )
+            neg_feature_embedding = neg_feature_embedding / torch.linalg.norm(
+                neg_feature_embedding, dim=-1, keepdim=True, ord=2
+            )
+
+        negative_sim = (
+            torch.linalg.vecdot(user_embedding, neg_feature_embedding, dim=-1)
             / self.temperature
         )
-        positive_cos_sim = (
-            torch.linalg.vecdot(user_embedding, neg_feature_embedding, dim=-1)
+        positive_sim = (
+            torch.linalg.vecdot(user_embedding, pos_feature_embedding, dim=-1)
             / self.temperature
         )
         # assert negative_cos_sim.shape == (b_s,)
@@ -382,29 +395,48 @@ class TowerModel(nn.Module):
         #     )
 
         # BCE
-        data = torch.cat([positive_cos_sim, negative_cos_sim], dim=1)
-        labels = torch.cat(
-            [torch.ones_like(positive_cos_sim), torch.zeros_like(negative_cos_sim)],
-            dim=1,
-        ).to(user_embedding.device)
-        # print(f"{data.shape=} {data.dtype=} {data.device}")
-        # print(f"{labels.shape=} {labels.dtype=} {labels.device}")
-        # print(f"{torch.isnan(data).any()} {torch.isinf(data).any()}")
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(data, labels)
-        return {
-            "loss": loss,
-            "positive_term": positive_cos_sim.mean().item(),
-            "negative_term": negative_cos_sim.mean().item(),
-        }
-
-        print()
+        if self.loss == "bce":
+            data = torch.cat([positive_sim, negative_sim], dim=1)
+            labels = torch.cat(
+                [torch.ones_like(positive_sim), torch.zeros_like(negative_sim)],
+                dim=1,
+            ).to(user_embedding.device)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(data, labels)
+            return {
+                "loss": loss,
+                "positive_term": positive_sim.mean().item(),
+                "negative_term": negative_sim.mean().item(),
+            }
 
         # Contrastive loss
-        # negative_cos_sim_exp = torch.exp(negative_cos_sim)
-        # positive_cos_sim_exp = torch.exp(positive_cos_sim)
+        if self.loss == "contrastive":
+            negative_sim_exp = torch.exp(negative_sim)
+            positive_sim_exp = torch.exp(positive_sim)
 
-        # pos_term = positive_cos_sim_exp.sum(dim=1)
-        # neg_term = negative_cos_sim_exp.sum(dim=1)
+            pos_term = positive_sim_exp.sum(dim=1)
+            neg_term = negative_sim_exp.sum(dim=1)
 
-        # loss = -torch.log(pos_term / (pos_term + neg_term)).mean()
+            loss = -torch.log(pos_term / (pos_term + neg_term)).mean()
+            return {
+                "loss": loss,
+                "positive_term": positive_sim.mean().item(),
+                "negative_term": negative_sim.mean().item(),
+            }
+
+        # Info NCE
+        if self.loss == "nce":
+            negative_sim_exp = torch.exp(negative_sim)
+            positive_sim_exp = torch.exp(positive_sim)
+
+            neg_term = negative_sim_exp.sum(dim=1, keepdim=True)
+            terms = -torch.log(positive_sim_exp / (positive_sim_exp + neg_term))
+            sum_terms = terms.sum(dim=1)
+            loss = sum_terms.mean()
+
+            return {
+                "loss": loss,
+                "positive_term": positive_sim.mean().item(),
+                "negative_term": negative_sim.mean().item(),
+            }
+
         # return loss
