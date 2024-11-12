@@ -36,7 +36,10 @@ def collate_user_feature(
     features: Tuple[torch.Tensor], user_embedder: List[Tuple[str, dict]]
 ):
     collated_features = []
-    for (feature_name, feature_metadata), feature in zip(user_embedder, zip(*features)):
+    zipped_features_over_batch = zip(*features)
+    for (feature_name, feature_metadata), feature in zip(
+        user_embedder, zipped_features_over_batch
+    ):
         assembled_feature = None
         match feature_name:
             case UserEmbedders.USER_EMBEDDING.value:
@@ -83,7 +86,7 @@ def featurize_singular_user(
     feature_name, feature_metadata = user_embedder
     match feature_name:
         case UserEmbedders.USER_EMBEDDING.value:
-            torch.tensor([user.cuid])
+            return torch.tensor([user.cuid])
         case _:
             raise NotImplementedError(f"Unrecognized user embedder {user_embedder}")
 

@@ -21,12 +21,12 @@
   "n_neg": 10,
   "lr": 1e-3,
   "epochs": 10,
-  "batch_size": 32,
+  "batch_size": 128,
   "dataset_args": {
     "shuffle": true
   },
   "load_from": "",
-  "save_to": "",
+  "save_to": "models/twotower/user_id__anime_id.pt",
   "use_histories": false,
-  "device": "cpu"
+  "device": "cuda"
 }

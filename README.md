@@ -4,6 +4,8 @@
 conda create --name cmu_10718 python==3.11
 conda activate cmu_10718
 pip install -r requirements.txt
+
+pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
 To install fastFM (linux only)
