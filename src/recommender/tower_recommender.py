@@ -30,6 +30,20 @@ from recommender.tower_recommender_embedders import (
 from utils.data.testbench import TestBench
 
 
+class ScoringModifications(Enum):
+    UPRANK = {
+        "function": str,
+        "score_weight": float,
+        "uprank_weight": float,
+    }
+    NONE = {}
+
+    def __new__(cls, parameters):
+        obj = object.__new__(cls)
+        obj.parameters = parameters
+        return obj
+
+
 class TowerRecommender(GenericRecommender):
     def __init__(
         self,
@@ -44,6 +58,7 @@ class TowerRecommender(GenericRecommender):
         n_neg: int = 10,
         loss="bce",  # bce, info_nce, contrastive
         sim="cosine",  # cosine, dot
+        scoring_modification=["none", {}],
         lr=1e-3,
         epochs=10,
         batch_size=32,
@@ -67,6 +82,8 @@ class TowerRecommender(GenericRecommender):
         self.n_neg = n_neg
         self.loss = loss
         self.sim = sim
+        self.scoring_modification_type = scoring_modification[0]
+        self.scoring_modification_parameters = scoring_modification[1]
 
         self.lr = lr
         self.epochs = epochs
@@ -266,11 +283,44 @@ class TowerRecommender(GenericRecommender):
             print(f"{user_embeddings.shape=} {anime_embeddings.shape=}")
             print(f"Commence God Operation")
             scores = user_embeddings @ anime_embeddings
+            scores = self.reweight(scores)
             # scores[user_interaction_mask] = -np.inf
             print(f"Commence Big Sort Energy")
             shows = np.argsort(-scores, axis=1)
             k_recommended = shows[:, :k]
             return scores, k_recommended
+
+    def reweight(self, scores):
+        scoring_modification = ScoringModifications[
+            self.scoring_modification_type.upper()
+        ]
+        match scoring_modification:
+            case ScoringModifications.NONE:
+                return scores
+            case ScoringModifications.UPRANK:
+                assert "function" in self.scoring_modification_parameters
+                assert "weight" in self.scoring_modification_parameters
+                match scoring_modification.parameters["function"]:
+                    case "log":
+                        function = np.log
+                    case "sqrt":
+                        function = np.sqrt
+                    case _:
+                        raise ValueError(f"Unrecognized function {function}")
+                score_weight = self.scoring_modification_parameters["score_weight"]
+                uprank_weight = self.scoring_modification_parameters["uprank_weight"]
+                community_sizes = function(
+                    np.array(
+                        [
+                            self.datamodule.canonical_anime_mapping[
+                                cuid
+                            ].membership_count
+                            for cuid in range(self.datamodule.max_anime_count)
+                        ]
+                    )
+                )
+
+                # TODO James
 
 
 class AnimeEnumerator(data.Dataset):
