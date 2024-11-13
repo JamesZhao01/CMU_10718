@@ -68,6 +68,7 @@ class TowerRecommender(GenericRecommender):
         save_to="",
         save_model=False,
         device="cuda",
+        be_quiet=True,
         **kwargs,
     ):
         super().__init__(datamodule)
@@ -109,6 +110,7 @@ class TowerRecommender(GenericRecommender):
                 }
                 f.write(f"(hyperparameters){json.dumps(relevant_args, indent=None)}\n")
         self.device = device
+        self.be_quiet = be_quiet
 
         self.model = TowerModel(
             n_users=n_users,
@@ -163,11 +165,13 @@ class TowerRecommender(GenericRecommender):
         start_time = time.time()
         for epoch in range(self.epochs):
             print(f"Epoch {epoch+1} / {self.epochs}")
-            batch_iterator = tqdm.tqdm(
-                enumerate(self.dataloader),
-                total=(len(self.dataloader.dataset) + self.batch_size - 1)
-                // self.batch_size,
-            )
+            batch_iterator = enumerate(self.dataloader)
+            if not self.be_quiet:
+                batch_iterator = tqdm.tqdm(
+                    batch_iterator,
+                    total=(len(self.dataloader.dataset) + self.batch_size - 1)
+                    // self.batch_size,
+                )
             epoch_loss, n = 0, 0
             for batch_idx, (user, positive, negative) in batch_iterator:
                 batch_size = len(user)
@@ -189,9 +193,10 @@ class TowerRecommender(GenericRecommender):
                 display["pos_term"] = display["pos_term"] * 0.8 + pos_term_item * 0.2
                 display["neg_term"] = display["neg_term"] * 0.8 + neg_term_item * 0.2
 
-                batch_iterator.set_description(
-                    f"L:{display['loss']:.3f}, +:{display['pos_term']:.3f}, -:{display['neg_term']:.3f}"
-                )
+                if not self.be_quiet:
+                    batch_iterator.set_description(
+                        f"L:{display['loss']:.3f}, +:{display['pos_term']:.3f}, -:{display['neg_term']:.3f}"
+                    )
                 losses.append(loss_item)
                 epoch_loss = (epoch_loss * n + loss_item) / (n + batch_size)
                 n += batch_size
@@ -250,9 +255,10 @@ class TowerRecommender(GenericRecommender):
             ]
 
             user_embeddings = []
-            for batch in tqdm.tqdm(
-                batchify(user_features, self.batch_size), desc="User Embeddings..."
-            ):
+            user_enumerator = batchify(user_features, self.batch_size)
+            if not self.be_quiet:
+                user_enumerator = tqdm.tqdm(user_enumerator, desc="User Embeddings...")
+            for batch in user_enumerator:
                 collated_user_features = collate_user_feature(batch, self.user_embedder)
                 collated_user_features = recursive_to_device(
                     collated_user_features, self.device
@@ -262,15 +268,15 @@ class TowerRecommender(GenericRecommender):
             user_embeddings = torch.vstack(user_embeddings)
 
             anime_embeddings = []
-            for batch in tqdm.tqdm(self.anime_dataloader, desc="Anime Embeddings..."):
+            anime_enumerator = self.anime_dataloader
+            if not self.be_quiet:
+                anime_enumerator = tqdm.tqdm(anime_enumerator, desc="Anime Embeddings...")
+            for batch in anime_enumerator:
                 collated_anime_features = [feature.to(self.device) for feature in batch]
                 batch_anime_embedding = self.model.embed_feats(collated_anime_features)
                 anime_embeddings.append(batch_anime_embedding)
             anime_embeddings = torch.vstack(anime_embeddings)
 
-            # user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=bool)
-            # for i, (user, history) in enumerate(zip(users, histories)):
-            #     user_interaction_mask[i, history] = True
             # (n, 1, dim) -> (n, dim, 1)
             user_embeddings = user_embeddings.permute(0, 2, 1).detach().cpu().numpy()
             # -> (n, dim)
@@ -280,12 +286,12 @@ class TowerRecommender(GenericRecommender):
             # -> (dim, a)
             anime_embeddings = np.squeeze(anime_embeddings, axis=0)
             # (n, dim, 1) x (1, dim, a) -> (n, a)
-            print(f"{user_embeddings.shape=} {anime_embeddings.shape=}")
-            print(f"Commence God Operation")
             scores = user_embeddings @ anime_embeddings
             scores = self.reweight(scores)
-            # scores[user_interaction_mask] = -np.inf
-            print(f"Commence Big Sort Energy")
+            
+            for i, (user, (list_of_anime, ndarray_of_ratings)) in enumerate(zip(users, history_tuples)):
+                scores[[i], [anime.id for anime in list_of_anime]] = -np.inf
+
             shows = np.argsort(-scores, axis=1)
             k_recommended = shows[:, :k]
             return scores, k_recommended
@@ -299,8 +305,10 @@ class TowerRecommender(GenericRecommender):
                 return scores
             case ScoringModifications.UPRANK:
                 assert "function" in self.scoring_modification_parameters
-                assert "weight" in self.scoring_modification_parameters
-                match scoring_modification.parameters["function"]:
+                assert "score_weight" in self.scoring_modification_parameters
+                assert "uprank_weight" in self.scoring_modification_parameters
+                function = None
+                match self.scoring_modification_parameters["function"]:
                     case "log":
                         function = np.log
                     case "sqrt":
@@ -309,7 +317,7 @@ class TowerRecommender(GenericRecommender):
                         raise ValueError(f"Unrecognized function {function}")
                 score_weight = self.scoring_modification_parameters["score_weight"]
                 uprank_weight = self.scoring_modification_parameters["uprank_weight"]
-                community_sizes = function(
+                community_sizes_vector = function(
                     np.array(
                         [
                             self.datamodule.canonical_anime_mapping[
@@ -319,8 +327,9 @@ class TowerRecommender(GenericRecommender):
                         ]
                     )
                 )
-
-                # TODO James
+                
+                modified_scores = scores * score_weight + np.expand_dims(community_sizes_vector, axis=0) * uprank_weight
+                return modified_scores
 
 
 class AnimeEnumerator(data.Dataset):

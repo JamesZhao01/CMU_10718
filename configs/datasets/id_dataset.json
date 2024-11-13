@@ -1,8 +1,0 @@
-{
-  "k": 10,
-  "path": "data/copperunion",
-  "thresholded_watch_history": 20,
-  "normalize_unrated": true,
-  "verbose": true,
-  "holdout_type": "interaction"
-}

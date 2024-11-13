@@ -39,6 +39,7 @@ class DataModule(JSONWizard):
     thresholded_watch_history: int
     normalize_unrated: bool
     verbose: bool
+    masked_is_negative: bool
 
     holdout_type: Literal["user", "interaction"]
     rng: np.random.Generator = field(
@@ -190,6 +191,7 @@ class DataModule(JSONWizard):
                 rating_history=np.array(filtered_rating_history),
                 imputed_history=np.array(imputed_rating_history),
                 k=self.k,
+                masked_is_negative=self.masked_is_negative,
                 max_anime_count=self.max_anime_count,
                 lazy_store=True,
             )

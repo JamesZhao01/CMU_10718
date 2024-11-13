@@ -1,0 +1,42 @@
+{
+    "embedding_dimension": 256,
+    "user_embedder": [
+        [
+            "user_embedding",
+            {
+                "embedding_dimension": 256
+            }
+        ]
+    ],
+    "item_embedder": [
+        [
+            "id_embedding",
+            {
+                "embedding_dimension": 256
+            }
+        ]
+    ],
+    "temperature": 5,
+    "n_pos": 10,
+    "n_neg": 200,
+    "loss": "bce",
+    "sim": "cosine",
+    "scoring_modification": [
+        "uprank",
+        {
+            "function": "log",
+            "score_weight": 1,
+            "uprank_weight": 0.2
+        }
+    ],
+    "lr": 1e-2,
+    "epochs": 20,
+    "batch_size": 512,
+    "dataset_args": {
+        "shuffle": true
+    },
+    "load_from": "",
+    "save_to": "models/twotower/3_user_id_anime_id_reweighting.pt",
+    "use_histories": false,
+    "device": "cuda"
+}

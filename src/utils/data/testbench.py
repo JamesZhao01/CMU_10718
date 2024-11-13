@@ -37,7 +37,7 @@ from utils.data.data_module import DataModule
 
 
 class TestBench:
-    def __init__(self, datamodule: DataModule, should_return_ids: bool = False):
+    def __init__(self, datamodule: DataModule, should_return_ids: bool = False, **kwargs):
         self.datamodule = datamodule
         self.should_return_ids = should_return_ids
 
