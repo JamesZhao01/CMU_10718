@@ -471,11 +471,12 @@ def train_awesome_embedder(fresh_embedder, anime_name_embeddings, user_history, 
             query_output_batch = query_output_batch.mean(dim=1).reshape(query_output_batch.shape[0], -1)
             query_output_batch = query_output_batch.reshape(-1, 1, args.embedding_size)
 
-            positive_output_batch = torch.concat([positive_output_batch, positive_name_batch_tensor], dim=-1)
-            negative_output_batch = torch.concat([negative_output_batch, negative_name_batch_tensor], dim=-1)
+            if args.anime_title:
+                positive_output_batch = torch.concat([positive_output_batch, positive_name_batch_tensor], dim=-1)
+                negative_output_batch = torch.concat([negative_output_batch, negative_name_batch_tensor], dim=-1)
 
-            ##repeat the last dimension of query_output_batch to match the last dimension of positive_output_batch and negative_output_batch
-            query_output_batch =  query_output_batch.repeat(1, 1, 7)
+                ##repeat the last dimension of query_output_batch to match the last dimension of positive_output_batch and negative_output_batch
+                query_output_batch =  query_output_batch.repeat(1, 1, 7)
 
             negative_cos_sim = torch.cosine_similarity(query_output_batch, negative_output_batch, dim=2) / args.temperature
             positive_cos_sim = torch.cosine_similarity(query_output_batch, positive_output_batch, dim=2) / args.temperature
@@ -590,9 +591,9 @@ def evaluate_awesome_embedder(fresh_embedder, anime_name_embeddings, user_histor
 
     user_embeddings = user_embeddings.detach().cpu().numpy()
     anime_embeddings = anime_embeddings.detach().cpu().numpy()
-
-    anime_embeddings = np.concatenate([anime_embeddings, anime_name_embeddings], axis=-1)
-    user_embeddings =  np.tile(user_embeddings, (1, 7))
+    if args.anime_title:
+        anime_embeddings = np.concatenate([anime_embeddings, anime_name_embeddings], axis=-1)
+        user_embeddings =  np.tile(user_embeddings, (1, 7))
 
     user_embeddings_norm = user_embeddings / np.linalg.norm(user_embeddings, axis=1, keepdims=True)
     anime_embeddings_norm = anime_embeddings / np.linalg.norm(anime_embeddings, axis=1, keepdims=True)
@@ -628,10 +629,11 @@ if __name__ == '__main__':
     parser.add_argument("--embed_batch_size", type=int, default=128)
     parser.add_argument("--embedding_size", type=int, default=128)   
     parser.add_argument("--learning_rate", type=float, default=3e-3)
-    parser.add_argument("--epochs", type=int, default=25) #25
+    parser.add_argument("--epochs", type=int, default=1) #25
     parser.add_argument("--negative_num", type=int, default=100)
     parser.add_argument("--grad_accum", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=1)
+    parser.add_argument("--anime_title", type=int, default=1)
     args = parser.parse_args()
     print(args)
 

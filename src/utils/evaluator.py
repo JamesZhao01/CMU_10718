@@ -406,8 +406,12 @@ class Evaluator:
         )
 
         score = ndcg_score(ground_truth_of_masked_history, pred, k=self.k)
+        diversity = self.calculate_diversity_by_community_count(k_recommended_shows)
+        diversity_raw = self.calculate_diversity_raw(k_recommended_shows)
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {score:0.4f}.")
+        print(f"This model has an aggregated diversity score of {diversity}.")
+        print(f"This model has a raw diversity score of {diversity_raw}.")
         return total_runtime, score
 
     def get_train_set(self):
@@ -427,3 +431,45 @@ class Evaluator:
 
         user_heldout_watch_history = user_watch_history - user_masked_watch_history
         return user_masked_watch_history, user_heldout_watch_history, self.k
+    
+    def calculate_diversity_by_community_count(self, k_recommended_shows: np.ndarray[int]):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count, 
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+        
+        total_community_count = 0
+        recommended = set()
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                anime:Anime = self.canonical_anime_mapping[id]
+                if id not in recommended:
+                    total_community_count += math.log(anime.membership_count)
+                    recommended.add(id)
+        return total_community_count
+    
+    def calculate_diversity_raw(self, k_recommended_shows: np.ndarray[int]):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count, 
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+        recommended = set()
+        total_posssible = k_recommended_shows.shape[0] * k_recommended_shows.shape[1]
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                if id not in recommended:
+                    recommended.add(id)
+        ##count elements in recommended
+        total_num = len(recommended)
+        score = total_num / total_posssible
+        return score
