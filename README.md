@@ -34,4 +34,6 @@ Michael is big dum dum
 
 ```bash
 $env:PYTHONPATH="src"; python ./src/recommender/run_pipeline.py --dataset_config configs/popularity/dataset.json --model_config configs/popularity/model.json --model POPULARITY --output_dir "models/popularity"
+
+$env:PYTHONPATH="src"; python "./src/recommender/sweep_pipeline.py" --dataset_config "configs/datasets/id_dataset.json" --model_config "configs/sweep_configs/1_user_embedder_base_256.json" --sweep_config "configs/sweep_configs/1_user_embedder_sweep.json" --model "TOWER" --output_dir "models/sweep/1_user_embedder_base_256"
 ```

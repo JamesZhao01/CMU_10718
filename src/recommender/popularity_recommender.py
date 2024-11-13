@@ -3,7 +3,7 @@ import numpy as np
 
 
 class PopularityRecommender(GenericRecommender):
-    def __init__(self, datamodule, popularity_mode="membership_count"):
+    def __init__(self, datamodule, popularity_mode="membership_count", **kwargs):
         super().__init__(datamodule)
         self.popularity_mode = popularity_mode
 
@@ -26,4 +26,4 @@ class PopularityRecommender(GenericRecommender):
             history = ratings_features[i].nonzero()[0]
             chooseable_mask = np.isin(self.ranked_items, history, invert=True)
             predictions.append(self.ranked_items[chooseable_mask][:k])
-        return np.vstack(predictions)
+        return None, np.vstack(predictions)

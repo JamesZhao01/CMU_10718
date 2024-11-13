@@ -100,7 +100,7 @@ class TestBench:
         - user_preserved_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
         - k: number of anime recommendations your model should present
 
-        Can also return (user_ids, user_histories) if should_return_ids is True
+        Can also return (list[User], [(list[Anime], ratings_ndarray)..]) if should_return_ids is True
         """
 
         if not self.should_return_ids:
@@ -112,7 +112,17 @@ class TestBench:
                 for test_cuid in self.datamodule.test_cuids
             ]
             user_histories = [
-                self.datamodule.canonical_user_mapping[test_cuid].preserved_cais
+                (
+                    [
+                        self.datamodule.canonical_anime_mapping[caid]
+                        for caid in self.datamodule.canonical_user_mapping[
+                            test_cuid
+                        ].preserved_cais
+                    ],
+                    self.datamodule.canonical_user_mapping[test_cuid].rating_history[
+                        self.datamodule.canonical_user_mapping[test_cuid].preserved
+                    ],
+                )
                 for test_cuid in self.datamodule.test_cuids
             ]
             to_return = users, user_histories
@@ -132,6 +142,14 @@ class TestBench:
 
         score = ndcg_score(masked_feature_ground_truth_scores, pred, k=self.k)
         return score
+
+    def calculate_r_precision(
+        self, k_recommended_shows: np.ndarray[int], k_truth: np.ndarray[int]
+    ):
+        """
+        What percentage of truth was recommended
+        """
+        pass
 
     def calculate_diversity_by_community_count(
         self, k_recommended_shows: np.ndarray[int]
@@ -202,20 +220,24 @@ class TestBench:
         print(f"Your DEI score is {diversity_score:0.4f}.")
         print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
         return {
-            "total runtime": total_runtime,
+            "runtime": total_runtime,
             "ndcg": ndcg_score,
             "diversity_score": diversity_score,
             "pseudo_iou": pseudo_iou,
         }
 
-    def full_evaluation(self, recommender: GenericRecommender):
+    def full_evaluation(self, recommender: GenericRecommender, return_scores=False):
         preserved_features, k = self.start_eval_test_set()
         scores, k_recommended_shows = recommender.infer(preserved_features, k)
         assert k_recommended_shows.shape == (self.n_test, k)
         results = self.end_eval_test_set(k_recommended_shows)
-
-        return results | {
-            "k_recommended_shows": k_recommended_shows,
-            "preserved_features": preserved_features,
-            "scores": scores,
-        }
+        auxiliary_results = (
+            {
+                "k_recommended_shows": k_recommended_shows,
+                "preserved_features": preserved_features,
+                "scores": scores,
+            }
+            if return_scores
+            else {}
+        )
+        return results | auxiliary_results

@@ -2,6 +2,7 @@ from abc import ABC
 from collections import defaultdict
 from enum import Enum
 from typing import List, Literal, Tuple
+import time
 
 import numpy as np
 import torch
@@ -9,6 +10,7 @@ import torch.nn as nn
 import torch.utils.data as data
 import tqdm
 import os
+import json
 
 import functools
 from recommender.generic_recommender import GenericRecommender
@@ -21,9 +23,11 @@ from recommender.tower_recommender_embedders import (
     item_collator,
     featurize_item_or_items,
     featurize_singular_user,
-    build_user_embedder,
-    build_item_embedder,
+    build_all_embedders,
+    fetch_auxiliary_data,
+    recursive_to_device,
 )
+from utils.data.testbench import TestBench
 
 
 class TowerRecommender(GenericRecommender):
@@ -44,9 +48,10 @@ class TowerRecommender(GenericRecommender):
         epochs=10,
         batch_size=32,
         dataset_args={},
+        dataset_wrapper_args={},
         load_from="",
         save_to="",
-        use_histories=False,
+        save_model=False,
         device="cuda",
         **kwargs,
     ):
@@ -68,19 +73,38 @@ class TowerRecommender(GenericRecommender):
         self.batch_size = batch_size
         self.load_from = load_from
         self.save_to = save_to
-        self.use_histories = use_histories
+        self.save_model = save_model
+        if self.save_to:
+            os.makedirs(os.path.dirname(self.save_to), exist_ok=True)
+            with open(f"{self.save_to}.log", "a") as f:
+                relevant_args = {
+                    "embedding_dimension": embedding_dimension,
+                    "user_embedder": user_embedder,
+                    "item_embedder": item_embedder,
+                    "temperature": temperature,
+                    "n_pos": n_pos,
+                    "n_neg": n_neg,
+                    "loss": loss,
+                    "sim": sim,
+                    "lr": lr,
+                    "epochs": epochs,
+                    "batch_size": batch_size,
+                }
+                f.write(f"(hyperparameters){json.dumps(relevant_args, indent=None)}\n")
         self.device = device
 
         self.model = TowerModel(
             n_users=n_users,
             n_anime=n_anime,
             embedding_dimension=embedding_dimension,
-            user_embedder=user_embedder,
-            item_embedder=item_embedder,
+            user_embedders_spec=user_embedder,
+            item_embedders_spec=item_embedder,
             temperature=temperature,
             loss=loss,
             sim=sim,
         ).to(self.device)
+        self.testbench = TestBench(datamodule, should_return_ids=True)
+
         if self.load_from:
             self.model.load_state_dict(torch.load(self.load_from, weights_only=True))
         self.dataset = DatasetWrapper(
@@ -89,6 +113,7 @@ class TowerRecommender(GenericRecommender):
             item_embedder=item_embedder,
             n_pos=n_pos,
             n_neg=n_neg,
+            auxiliary_data=dataset_wrapper_args,
         )
         self.dataloader = data.DataLoader(
             dataset=self.dataset,
@@ -101,7 +126,9 @@ class TowerRecommender(GenericRecommender):
             **dataset_args,
         )
 
-        self.anime_dataset = AnimeEnumerator(datamodule, item_embedder)
+        self.anime_dataset = AnimeEnumerator(
+            datamodule, item_embedder, self.dataset.auxiliary_data
+        )
         self.anime_dataloader = data.DataLoader(
             dataset=self.anime_dataset,
             batch_size=batch_size,
@@ -116,6 +143,7 @@ class TowerRecommender(GenericRecommender):
         losses = []
         epoch_losses = []
         display = defaultdict(int)
+        start_time = time.time()
         for epoch in range(self.epochs):
             print(f"Epoch {epoch+1} / {self.epochs}")
             batch_iterator = tqdm.tqdm(
@@ -126,9 +154,9 @@ class TowerRecommender(GenericRecommender):
             epoch_loss, n = 0, 0
             for batch_idx, (user, positive, negative) in batch_iterator:
                 batch_size = len(user)
-                user = [u.to(self.device) for u in user]
-                positive = [p.to(self.device) for p in positive]
-                negative = [n.to(self.device) for n in negative]
+                user = recursive_to_device(user, self.device)
+                positive = recursive_to_device(positive, self.device)
+                negative = recursive_to_device(negative, self.device)
 
                 self.optimizer.zero_grad()
                 self.model.train()
@@ -151,11 +179,24 @@ class TowerRecommender(GenericRecommender):
                 epoch_loss = (epoch_loss * n + loss_item) / (n + batch_size)
                 n += batch_size
             epoch_losses.append(epoch_loss)
-            print(f"[{epoch}] Loss: {epoch_loss}")
-        if self.save_to:
+
+            current_time = time.time()
+            elapsed_time = current_time - start_time
+            estimated_time = elapsed_time / (epoch + 1) * self.epochs
+            estimated_remainder = estimated_time - elapsed_time
+            print(
+                f"[{epoch}] Loss: {epoch_loss:0.4f}. Time: {elapsed_time:0.2f} s / {estimated_time:0.2f} s. ETA: {estimated_remainder:0.2f} s"
+            )
+            metrics = self.testbench.full_evaluation(self, return_scores=False)
+            print(f">>{epoch}|{loss}|{json.dumps(metrics, indent=None)}<<")
+            with open(f"{self.save_to}.log", "a") as f:
+                f.write(f">>{epoch}|{loss}|{json.dumps(metrics, indent=None)}<<\n")
+
+        if self.save_model and self.save_to:
             print(f"Saving model to {self.save_to}")
-            os.makedirs(os.path.dirname(self.save_to), exist_ok=True)
             torch.save(self.model.state_dict(), self.save_to)
+        with open(f"{self.save_to}.log", "a") as f:
+            f.write(f"(Fin)\n")
         return {
             "losses": losses,
             "epoch_losses": epoch_losses,
@@ -180,15 +221,15 @@ class TowerRecommender(GenericRecommender):
 
         self.model.eval()
         with torch.no_grad():
-            users, histories = features
-            users: List[User]
-            histories: List[List[int]]
+            users, history_tuples = features
             user_features = [
                 [
-                    featurize_singular_user(user, history, embedder)
+                    featurize_singular_user(
+                        user, history_tuple, embedder, self.dataset.auxiliary_data
+                    )
                     for embedder in self.user_embedder
                 ]
-                for user, history in zip(users, histories)
+                for user, history_tuple in zip(users, history_tuples)
             ]
 
             user_embeddings = []
@@ -196,9 +237,9 @@ class TowerRecommender(GenericRecommender):
                 batchify(user_features, self.batch_size), desc="User Embeddings..."
             ):
                 collated_user_features = collate_user_feature(batch, self.user_embedder)
-                collated_user_features = [
-                    feature.to(self.device) for feature in collated_user_features
-                ]
+                collated_user_features = recursive_to_device(
+                    collated_user_features, self.device
+                )
                 batch_user_embedding = self.model.embed_user(collated_user_features)
                 user_embeddings.append(batch_user_embedding)
             user_embeddings = torch.vstack(user_embeddings)
@@ -233,10 +274,16 @@ class TowerRecommender(GenericRecommender):
 
 
 class AnimeEnumerator(data.Dataset):
-    def __init__(self, datamodule: DataModule, item_embedder: List[Tuple[str, dict]]):
+    def __init__(
+        self,
+        datamodule: DataModule,
+        item_embedder: List[Tuple[str, dict]],
+        auxiliary_data: dict,
+    ):
         super().__init__()
         self.datamodule = datamodule
         self.item_embedder = item_embedder
+        self.auxiliary_data = auxiliary_data
 
     def __len__(self):
         return self.datamodule.max_anime_count
@@ -245,7 +292,8 @@ class AnimeEnumerator(data.Dataset):
         anime = self.datamodule.canonical_anime_mapping[idx]
 
         return [
-            featurize_item_or_items(anime, embedder) for embedder in self.item_embedder
+            featurize_item_or_items(anime, embedder, self.auxiliary_data)
+            for embedder in self.item_embedder
         ]
 
 
@@ -257,6 +305,7 @@ class DatasetWrapper(data.Dataset):
         item_embedder: List[Tuple[str, dict]],
         n_pos: int = 10,
         n_neg: int = 10,
+        auxiliary_data: dict = {},
     ):
         super().__init__()
         self.datamodule = datamodule
@@ -264,6 +313,7 @@ class DatasetWrapper(data.Dataset):
         self.item_embedder = item_embedder
         self.n_pos = n_pos
         self.n_neg = n_neg
+        self.auxiliary_data = fetch_auxiliary_data(auxiliary_data)
 
     def __len__(self):
         return self.datamodule.max_user_count
@@ -275,21 +325,25 @@ class DatasetWrapper(data.Dataset):
             self.datamodule.canonical_anime_mapping[anime] for anime in positives
         ]
         history = [self.datamodule.canonical_anime_mapping[anime] for anime in history]
+        ratings = user.rating_history[user.preserved]
+
+        history_tuple = (history, ratings)
+
         negatives = user.sample_negative(self.n_neg)
         negatives = [
             self.datamodule.canonical_anime_mapping[anime] for anime in negatives
         ]
 
         user_feature = [
-            featurize_singular_user(user, history, embedder)
+            featurize_singular_user(user, history_tuple, embedder, self.auxiliary_data)
             for embedder in self.user_embedder
         ]
         pos_feature = [
-            featurize_item_or_items(positives, embedder)
+            featurize_item_or_items(positives, embedder, self.auxiliary_data)
             for embedder in self.item_embedder
         ]
         neg_feature = [
-            featurize_item_or_items(negatives, embedder)
+            featurize_item_or_items(negatives, embedder, self.auxiliary_data)
             for embedder in self.item_embedder
         ]
         return user_feature, pos_feature, neg_feature
@@ -301,8 +355,8 @@ class TowerModel(nn.Module):
         n_users: int,
         n_anime: int,
         embedding_dimension: int,
-        user_embedder: str,
-        item_embedder: List[Tuple[str, dict]],
+        user_embedders_spec: str,
+        item_embedders_spec: List[Tuple[str, dict]],
         temperature: float = 1,
         loss: Literal["bce", "contrastive", "info_nce"] = "bce",
         sim: Literal["cosine", "dot"] = "cosine",
@@ -315,20 +369,16 @@ class TowerModel(nn.Module):
         self.loss = loss
         self.sim = sim
 
-        self.user_embedders = torch.nn.ModuleList(
-            [
-                build_user_embedder(embedder_type, embedder_metadata, self.n_users)
-                for embedder_type, embedder_metadata in user_embedder
-            ]
+        user_embedders, item_embedders = build_all_embedders(
+            user_embedders_spec=user_embedders_spec,
+            item_embedders_spec=item_embedders_spec,
+            n_users=n_users,
+            n_anime=n_anime,
         )
-        self.item_embedders = torch.nn.ModuleList(
-            [
-                build_item_embedder(embedder_type, embedder_metadata, self.n_anime)
-                for embedder_type, embedder_metadata in item_embedder
-            ]
-        )
+        self.user_embedders = user_embedders
+        self.item_embedders = item_embedders
 
-    def embed_user(self, feats: Tuple[torch.Tensor]):
+    def embed_user(self, feats: Tuple[torch.Tensor | Tuple[torch.Tensor]]):
         user_embeddings = [
             embedder(feats[i]) for i, embedder in enumerate(self.user_embedders)
         ]
@@ -383,16 +433,6 @@ class TowerModel(nn.Module):
             torch.linalg.vecdot(user_embedding, pos_feature_embedding, dim=-1)
             / self.temperature
         )
-        # assert negative_cos_sim.shape == (b_s,)
-        # if torch.rand(1).item() < 0.1:
-        #     print(
-        #         f"{user_embedding.shape=} / {pos_feature_embedding.shape=} / {neg_feature_embedding.shape=}"
-        #     )
-        #     # print(f"{user_embedding[:5, :5]=}")
-        #     # print(f"{pos_feature_embedding[:5, :5]=}")
-        #     print(
-        #         f"{negative_cos_sim.mean().item()=} / {positive_cos_sim.mean().item()=}"
-        #     )
 
         # BCE
         if self.loss == "bce":

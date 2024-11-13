@@ -11,3 +11,4 @@ jinja2
 torch
 implicit
 dataclass-wizard
+transformers

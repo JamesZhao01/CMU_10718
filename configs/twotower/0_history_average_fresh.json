@@ -1,0 +1,26 @@
+{
+  "embedding_dimension": 256,
+  "user_embedder": [["shared_preserved_avg", {}]],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 256
+      }
+    ]
+  ],
+  "temperature": 2,
+  "n_pos": 10,
+  "n_neg": 10,
+  "loss": "bce",
+  "sim": "cosine",
+  "lr": 1e-3,
+  "epochs": 5,
+  "batch_size": 128,
+  "dataset_args": {
+    "shuffle": true
+  },
+  "load_from": "",
+  "save_to": "models/twotower/user_id__anime_id_fresh.pt",
+  "device": "cuda"
+}
