@@ -28,7 +28,7 @@
   "loss": "bce",
   "sim": "cosine",
   "lr": 5e-3,
-  "epochs": 20,
+  "epochs": 200,
   "batch_size": 512,
   "dataset_args": {
     "shuffle": true

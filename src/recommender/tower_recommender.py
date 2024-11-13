@@ -268,9 +268,11 @@ class TowerRecommender(GenericRecommender):
                 anime_embeddings.append(batch_anime_embedding)
             anime_embeddings = torch.vstack(anime_embeddings)
 
-            # user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=bool)
-            # for i, (user, history) in enumerate(zip(users, histories)):
-            #     user_interaction_mask[i, history] = True
+            user_interaction_mask = np.zeros((len(users), self.n_anime), dtype=bool)
+            print('history_tuples',len(history_tuples))
+            for i, (user, history) in enumerate(zip(users, history_tuples)):
+                anime_ids = np.array([anime.id for anime in history[0]])
+                user_interaction_mask[i, anime_ids] = True
             # (n, 1, dim) -> (n, dim, 1)
             user_embeddings = user_embeddings.permute(0, 2, 1).detach().cpu().numpy()
             # -> (n, dim)
@@ -284,7 +286,7 @@ class TowerRecommender(GenericRecommender):
             print(f"Commence God Operation")
             scores = user_embeddings @ anime_embeddings
             scores = self.reweight(scores)
-            # scores[user_interaction_mask] = -np.inf
+            scores[user_interaction_mask] = -np.inf
             print(f"Commence Big Sort Energy")
             shows = np.argsort(-scores, axis=1)
             k_recommended = shows[:, :k]

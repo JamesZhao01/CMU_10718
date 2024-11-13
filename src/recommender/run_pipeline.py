@@ -40,12 +40,17 @@ def main(args: dict):
     datamodule = DataModule(**dataset_config)
 
     testbench = TestBench(datamodule, **dataset_config)
+    testbench = TestBench(
+        datamodule, should_return_ids=args.get("should_return_ids", False)
+    )
+
+
     auxiliary_args = {
         "n_users": datamodule.max_user_count,
         "n_anime": datamodule.max_anime_count,
     }
-    model_config = model_config + auxiliary_args
-    model = Models.from_string(args["model"])(data_module=datamodule, **model_config)
+    model_config = model_config | auxiliary_args
+    model = Models.from_string(args["model"].upper())(datamodule=datamodule, **model_config)
 
     model.train()
     metrics = testbench.full_evaluation(model)
@@ -65,5 +70,13 @@ if __name__ == "__main__":
         "--model", type=str, default="POPULARITY", choices=[val.name for val in Models]
     )
     parser.add_argument("--output_dir", type=str, default="models/default")
+    parser.add_argument("--should_return_ids", action="store_true")
     args = vars(parser.parse_args())
     main(args)
+
+# /home/msmu/repos/CMU_10718/configs/datasets
+# export PYTHONPATH="src"; python src/recommender/run_pipeline.py \
+#   --dataset_config configs/datasets/id_dataset.json \
+#   --model_config configs/twotower/2_user_id_anime_id_title_fresh.json \
+#   --model TOWER \
+#   --should_return_ids
