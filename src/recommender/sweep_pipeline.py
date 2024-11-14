@@ -43,7 +43,7 @@ def sweep(
     est_offset = timezone(timedelta(hours=-5))
     current_est_time = datetime.now(est_offset).strftime("%Y-%m-%d %H:%M:%S")
     
-    chunk_size = (total_experiments + chunk_idx - 1) // num_chunks
+    chunk_size = (total_experiments + num_chunks - 1) // num_chunks
     start = chunk_idx * chunk_size
     end_exclusive = min((chunk_idx + 1) * chunk_size, total_experiments)
     preface = f"=== {current_est_time} [{chunk_idx}/{num_chunks}]"
