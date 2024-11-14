@@ -1,10 +1,10 @@
 {
-    "embedding_dimension": 256,
+    "embedding_dimension": 512,
     "user_embedder": [
         [
             "user_embedding",
             {
-                "embedding_dimension": 256
+                "embedding_dimension": 512
             }
         ]
     ],
@@ -12,7 +12,7 @@
         [
             "id_embedding",
             {
-                "embedding_dimension": 256
+                "embedding_dimension": 512
             }
         ]
     ],

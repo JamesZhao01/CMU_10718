@@ -208,7 +208,10 @@ class DataModule(JSONWizard):
         if self.holdout_type == "user":
             pass
         elif self.holdout_type == "interaction":
-            for cuid in tqdm.tqdm(self.train_cuids, desc="Resetting Train to k=0 ..."):
+            resetting_iterator = self.train_cuids
+            if self.verbose:
+                resetting_iterator = tqdm.tqdm(resetting_iterator,  desc="Resetting Train to k=0 ...")
+            for cuid in resetting_iterator:
                 user = self.canonical_user_mapping[cuid]
                 user.k = 0
                 user.reshuffle()
