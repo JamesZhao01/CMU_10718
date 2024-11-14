@@ -1,0 +1,44 @@
+{
+  "embedding_dimension": 896,
+  "user_embedder": [
+    [
+      "user_embedding",
+      {
+        "embedding_dimension": 896
+      }
+    ]
+  ],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 128
+      }
+    ],
+    [
+      "title_pretrained_embedding",
+      {
+        "model": []
+      }
+    ]
+  ],
+  "temperature": 1,
+  "n_pos": 10,
+  "n_neg": 10,
+  "loss": "bce",
+  "sim": "cosine",
+  "lr": 5e-3,
+  "epochs": 0,
+  "batch_size": 512,
+  "dataset_args": {
+    "shuffle": true
+  },
+  "dataset_wrapper_args": {
+    "npy_title_pretrained_embedding": "data/embeddings/gte-base_titles.npy"
+  },
+  "load_from": "",
+  "save_to": "",
+  "device": "cuda",
+  "test_temp": 1.0,
+  "sampling": "uni" 
+}

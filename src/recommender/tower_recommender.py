@@ -68,6 +68,8 @@ class TowerRecommender(GenericRecommender):
         save_to="",
         save_model=False,
         device="cuda",
+        test_temp=1.0,
+        sampling=None,
         **kwargs,
     ):
         super().__init__(datamodule)
@@ -84,6 +86,8 @@ class TowerRecommender(GenericRecommender):
         self.sim = sim
         self.scoring_modification_type = scoring_modification[0]
         self.scoring_modification_parameters = scoring_modification[1]
+        self.test_temp = test_temp
+        self.sampling = sampling
 
         self.lr = lr
         self.epochs = epochs
@@ -285,11 +289,27 @@ class TowerRecommender(GenericRecommender):
             print(f"{user_embeddings.shape=} {anime_embeddings.shape=}")
             print(f"Commence God Operation")
             scores = user_embeddings @ anime_embeddings
+
             scores = self.reweight(scores)
             scores[user_interaction_mask] = -np.inf
             print(f"Commence Big Sort Energy")
-            shows = np.argsort(-scores, axis=1)
-            k_recommended = shows[:, :k]
+            if self.sampling == "uni":
+                shows = np.argsort(-scores, axis=1)
+                shows = shows[:, :3*k]
+                k_recommended = np.zeros((len(users), k), dtype=int)
+                for i, user in enumerate(users):
+                    k_recommended[i] = np.random.choice(shows[i], k, replace=False)
+            elif self.sampling == "boltzmann":
+                shows = np.argsort(-scores, axis=1)
+                shows = shows[:, :3*k]
+                k_recommended = np.zeros((len(users), k), dtype=int)
+                for i, user in enumerate(users):
+                    probs = np.exp(scores[i, shows[i]] / self.test_temp)
+                    probs /= probs.sum()
+                    k_recommended[i] = np.random.choice(shows[i], k, p=probs, replace=False)
+            else:
+                shows = np.argsort(-scores, axis=1)
+                k_recommended = shows[:, :k]
             return scores, k_recommended
 
     def reweight(self, scores):
