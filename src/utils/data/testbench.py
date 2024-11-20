@@ -23,6 +23,7 @@ For Matrix Factorization models, user embeddings will need to be re-trained duri
 For Two-Tower models, models will need to made agnostic to user embeddings
 """
 
+from functools import cache
 import math
 import time
 from datetime import datetime
@@ -37,11 +38,20 @@ from utils.data.data_module import DataModule
 
 
 class TestBench:
-    def __init__(self, datamodule: DataModule, should_return_ids: bool = False, **kwargs):
+    def __init__(
+        self,
+        datamodule: DataModule,
+        should_return_ids: bool = False,
+        calibration_buckets=10,
+        sigmoid_scores=False,
+        **kwargs,
+    ):
         self.datamodule = datamodule
         self.should_return_ids = should_return_ids
 
         self.k = self.datamodule.k
+        self.calibration_buckets = calibration_buckets
+        self.sigmoid_scores = sigmoid_scores
         self.n_test = len(self.datamodule.test_cuids)
         self.n_anime = self.datamodule.max_anime_count
 
@@ -64,6 +74,7 @@ class TestBench:
         assert arr.shape == (self.n_test, self.n_anime)
         return arr
 
+    @cache
     def get_masked_feature_tensor(self) -> np.ndarray[float]:
         """_summary_
 
@@ -195,7 +206,53 @@ class TestBench:
         score = total_num / total_posssible
         return score
 
-    def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
+    def binary_calibration(self, scores: np.ndarray[int], buckets=10):
+        """
+        Calibration score (ECE) for binary classification
+        Within each bucket, find the actual success rate and compare it with the predicted probabilities
+        """
+        masked_feature_matrix = self.get_masked_feature_tensor().flatten()
+        masked_interaction_matrix = ~np.isclose(masked_feature_matrix, 0)
+        n = len(masked_feature_matrix)
+
+        predicted_probabilities = np.array(scores.flatten())
+        assert len(predicted_probabilities) == n == len(masked_interaction_matrix)
+        if self.sigmoid_scores:
+            predicted_probabilities = 1 / (1 + np.exp(-predicted_probabilities))
+        print(np.min(predicted_probabilities), np.max(predicted_probabilities))
+        bucket_idx = np.floor(predicted_probabilities / buckets).astype(np.int32)
+        bucket_frequencies = np.bincount(bucket_idx)
+        bucket_n_success = np.array(
+            [len(masked_interaction_matrix[bucket_idx == i]) for i in range(buckets)]
+        )
+        bucket_accuracies = bucket_n_success / bucket_frequencies
+        bucket_average_probabilities = np.array(
+            [
+                (
+                    np.mean(predicted_probabilities[bucket_idx == i])
+                    if bucket_frequencies[i] > 0
+                    else 0
+                )
+                for i in range(buckets)
+            ]
+        )
+        ece = (
+            np.sum(
+                bucket_frequencies
+                * np.abs(bucket_accuracies - bucket_average_probabilities)
+            )
+            / n
+        )
+        return {
+            "ece": ece,
+            "bucket_frequencies": bucket_frequencies,
+            "bucket_accuracies": bucket_accuracies,
+            "bucket_average_probabilities": bucket_average_probabilities,
+        }
+
+    def end_eval_test_set(
+        self, scores: np.ndarray[int], k_recommended_shows: np.ndarray[int]
+    ):
         """
         Run this method to end the evaluation program.
         I expect k_recommended_shows to be of shape [test_set_size, k].
@@ -214,23 +271,35 @@ class TestBench:
             k_recommended_shows
         )
         pseudo_iou = self.pseudo_iou(k_recommended_shows)
+        calibration_scores = self.binary_calibration(scores, self.calibration_buckets)
 
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {ndcg_score:0.4f}.")
         print(f"Your DEI score is {diversity_score:0.4f}.")
         print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
+        print(f"Your calibration score is {calibration_scores['ece']:0.4f}.")
+        calibration_breakdown = list(
+            zip(
+                calibration_scores["bucket_frequencies"],
+                calibration_scores["bucket_accuracies"],
+                calibration_scores["bucket_average_probabilities"],
+            )
+        )
+        print(
+            f"Your calibration breakdown (freq, acc, avg_prob) is {','.join([f'({a},{b:0.4f},{c:0.4f})' for a, b, c in calibration_breakdown])}"
+        )
         return {
             "runtime": total_runtime,
             "ndcg": ndcg_score,
             "diversity_score": diversity_score,
             "pseudo_iou": pseudo_iou,
-        }
+        } | calibration_scores
 
     def full_evaluation(self, recommender: GenericRecommender, return_scores=False):
         preserved_features, k = self.start_eval_test_set()
         scores, k_recommended_shows = recommender.infer(preserved_features, k)
         assert k_recommended_shows.shape == (self.n_test, k)
-        results = self.end_eval_test_set(k_recommended_shows)
+        results = self.end_eval_test_set(scores, k_recommended_shows)
         auxiliary_results = (
             {
                 "k_recommended_shows": k_recommended_shows,

@@ -21,6 +21,6 @@ class GenericRecommender(ABC):
             ratings_features: tensor of dimension (n_test, n_anime)
 
         Returns:
-            np.ndarray[int]: tensor of size (n_test, k)
+            (np.ndarray[int], np.ndarray[int]): tensor of size (n_test, n_anime), with scores of size (n_test, k)
         """
         raise NotImplementedError("infer() not implemented")
