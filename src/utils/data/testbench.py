@@ -214,18 +214,27 @@ class TestBench:
         masked_feature_matrix = self.get_masked_feature_tensor().flatten()
         masked_interaction_matrix = ~np.isclose(masked_feature_matrix, 0)
         n = len(masked_feature_matrix)
+        ct_positive = np.sum(masked_interaction_matrix)
 
         predicted_probabilities = np.array(scores.flatten())
         assert len(predicted_probabilities) == n == len(masked_interaction_matrix)
         if self.sigmoid_scores:
             predicted_probabilities = 1 / (1 + np.exp(-predicted_probabilities))
-        print(np.min(predicted_probabilities), np.max(predicted_probabilities))
-        bucket_idx = np.floor(predicted_probabilities / buckets).astype(np.int32)
-        bucket_frequencies = np.bincount(bucket_idx)
+
+        # print(f"Binary Calibration: {n=} {ct_positive=}")
+        # print(np.min(predicted_probabilities), np.max(predicted_probabilities))
+
+        bucket_idx = np.floor(predicted_probabilities * buckets).astype(np.int32)
+        bucket_frequencies = np.zeros((buckets,))
+        bucket_bincounts = np.bincount(bucket_idx)
+        for i in range(len(bucket_bincounts)):
+            bucket_frequencies[i] = bucket_bincounts[i]
         bucket_n_success = np.array(
-            [len(masked_interaction_matrix[bucket_idx == i]) for i in range(buckets)]
+            [sum(masked_interaction_matrix[bucket_idx == i]) for i in range(buckets)]
         )
-        bucket_accuracies = bucket_n_success / bucket_frequencies
+        bucket_accuracies = np.where(
+            bucket_frequencies == 0, 0, bucket_n_success / bucket_frequencies
+        )
         bucket_average_probabilities = np.array(
             [
                 (
@@ -236,6 +245,8 @@ class TestBench:
                 for i in range(buckets)
             ]
         )
+        assert np.sum(bucket_frequencies) == n
+        assert np.sum(bucket_n_success) == ct_positive
         ece = (
             np.sum(
                 bucket_frequencies
@@ -285,9 +296,15 @@ class TestBench:
                 calibration_scores["bucket_average_probabilities"],
             )
         )
-        print(
-            f"Your calibration breakdown (freq, acc, avg_prob) is {','.join([f'({a},{b:0.4f},{c:0.4f})' for a, b, c in calibration_breakdown])}"
+        print(f"Your calibration breakdown: ")
+        title_a, title_b, title_c = (
+            "Bucket Frequency",
+            "Bucket Accuracy",
+            "Bucket Average Probability",
         )
+        print(f"{title_a:<20s}|{title_b:<20s}|{title_c:<20s}")
+        for a, b, c in calibration_breakdown:
+            print(f"{a:^20.2f}|{b:^20.4f}|{c:^20.4f}")
         return {
             "runtime": total_runtime,
             "ndcg": ndcg_score,
