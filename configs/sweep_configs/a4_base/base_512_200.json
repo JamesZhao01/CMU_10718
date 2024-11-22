@@ -32,5 +32,10 @@
     "device": "cuda",
     "save_model": true,
     "testbench_calibration_buckets": 10,
-    "testbench_sigmoid_scores": true
+    "testbench_sigmoid_scores": true,
+    "testbench_calibration_breakpoints": [
+        0.1,
+        0.5,
+        0.9
+    ]
 }
