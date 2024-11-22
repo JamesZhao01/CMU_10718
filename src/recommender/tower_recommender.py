@@ -69,6 +69,9 @@ class TowerRecommender(GenericRecommender):
         save_model=False,
         device="cuda",
         be_quiet=True,
+        testbench_sigmoid_scores=False,
+        testbench_calibration_buckets=10,
+        testbench_calibration_breakpoints=[],
         **kwargs,
     ):
         super().__init__(datamodule)
@@ -94,7 +97,7 @@ class TowerRecommender(GenericRecommender):
         self.save_model = save_model
         if self.save_to:
             os.makedirs(os.path.dirname(self.save_to), exist_ok=True)
-            with open(f"{self.save_to}.log", "a") as f:
+            with open(f"{self.save_to}.log", "w") as f:
                 relevant_args = {
                     "embedding_dimension": embedding_dimension,
                     "user_embedder": user_embedder,
@@ -107,6 +110,8 @@ class TowerRecommender(GenericRecommender):
                     "lr": lr,
                     "epochs": epochs,
                     "batch_size": batch_size,
+                    "testbench_sigmoid_scores": testbench_sigmoid_scores,
+                    "testbench_calibration_buckets": testbench_calibration_buckets,
                 }
                 f.write(f"(hyperparameters){json.dumps(relevant_args, indent=None)}\n")
         self.device = device
@@ -122,7 +127,13 @@ class TowerRecommender(GenericRecommender):
             loss=loss,
             sim=sim,
         ).to(self.device)
-        self.testbench = TestBench(datamodule, should_return_ids=True)
+        self.testbench = TestBench(
+            datamodule,
+            should_return_ids=True,
+            sigmoid_scores=testbench_sigmoid_scores,
+            calibration_buckets=testbench_calibration_buckets,
+            calibration_breakpoints=testbench_calibration_breakpoints,
+        )
 
         if self.load_from:
             self.model.load_state_dict(torch.load(self.load_from, weights_only=True))
@@ -270,7 +281,9 @@ class TowerRecommender(GenericRecommender):
             anime_embeddings = []
             anime_enumerator = self.anime_dataloader
             if not self.be_quiet:
-                anime_enumerator = tqdm.tqdm(anime_enumerator, desc="Anime Embeddings...")
+                anime_enumerator = tqdm.tqdm(
+                    anime_enumerator, desc="Anime Embeddings..."
+                )
             for batch in anime_enumerator:
                 collated_anime_features = [feature.to(self.device) for feature in batch]
                 batch_anime_embedding = self.model.embed_feats(collated_anime_features)
@@ -287,9 +300,11 @@ class TowerRecommender(GenericRecommender):
             anime_embeddings = np.squeeze(anime_embeddings, axis=0)
             # (n, dim, 1) x (1, dim, a) -> (n, a)
             scores = user_embeddings @ anime_embeddings
-            scores = self.reweight(scores)
-            
-            for i, (user, (list_of_anime, ndarray_of_ratings)) in enumerate(zip(users, history_tuples)):
+            # scores = self.reweight(scores)
+
+            for i, (user, (list_of_anime, ndarray_of_ratings)) in enumerate(
+                zip(users, history_tuples)
+            ):
                 scores[[i], [anime.id for anime in list_of_anime]] = -np.inf
 
             shows = np.argsort(-scores, axis=1)
@@ -327,8 +342,11 @@ class TowerRecommender(GenericRecommender):
                         ]
                     )
                 )
-                
-                modified_scores = scores * score_weight + np.expand_dims(community_sizes_vector, axis=0) * uprank_weight
+
+                modified_scores = (
+                    scores * score_weight
+                    + np.expand_dims(community_sizes_vector, axis=0) * uprank_weight
+                )
                 return modified_scores
 
 

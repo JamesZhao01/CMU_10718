@@ -57,29 +57,29 @@ def sweep(
         sweep_config_i = dict(zip(keys, sweep_values))
         full_config = base_model_config | sweep_config_i
         save_to = os.path.join(output_dir, f"model_{i}.pt")
+        os.makedirs(output_dir, exist_ok=True)
         log_file = save_to + ".log"
         full_config = full_config | {"save_to": save_to}
+        inner_preface = f"{preface} {i=}"
 
         if os.path.exists(log_file):
-            with open(save_to, "r") as f:
+            with open(log_file, "r") as f:
                 contents = f.read().strip()
-                if not contents.endswith("(Fin)"):
+                if contents.endswith("(Fin)"):
                     if not force_retrain:
                         print(
-                            f"=== [{chunk_idx}/{num_chunks}] File {save_to} already ends with (Fin)"
+                            f"{inner_preface} File {log_file} already ends with (Fin)"
                         )
                         continue
                     else:
                         print(
-                            f"=== [{chunk_idx}/{num_chunks}] Retraining despite {save_to} already ends with (Fin)"
+                            f"{inner_preface} Retraining despite {log_file} already ends with (Fin)"
                         )
 
-        print(
-            f"{preface} Sweep {i} with config {json.dumps(sweep_config_i, indent=None)}"
-        )
+        print(f"{inner_preface} Config {json.dumps(sweep_config_i, indent=None)}")
         with open(save_to + ".log", "a") as f:
             f.write(
-                f"{preface} Sweep {i} with config {json.dumps(sweep_config_i, indent=None)}\n"
+                f"{inner_preface} Config {json.dumps(sweep_config_i, indent=None)}\n"
             )
         model = Models.from_string(model_type)(datamodule=datamodule, **full_config)
         model.train()
@@ -133,6 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_chunks", type=int, required=True)
     parser.add_argument("--chunk_idx", type=int, required=True)
     parser.add_argument("--force_retrain", action="store_true")
+
     parser.add_argument(
         "--model", type=str, default="TOWER", choices=[val.name for val in Models]
     )

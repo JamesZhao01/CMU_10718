@@ -43,6 +43,7 @@ class TestBench:
         datamodule: DataModule,
         should_return_ids: bool = False,
         calibration_buckets=10,
+        calibration_breakpoints=None,
         sigmoid_scores=False,
         **kwargs,
     ):
@@ -51,6 +52,7 @@ class TestBench:
 
         self.k = self.datamodule.k
         self.calibration_buckets = calibration_buckets
+        self.calibration_breakpoints = calibration_breakpoints
         self.sigmoid_scores = sigmoid_scores
         self.n_test = len(self.datamodule.test_cuids)
         self.n_anime = self.datamodule.max_anime_count
@@ -206,35 +208,24 @@ class TestBench:
         score = total_num / total_posssible
         return score
 
-    def binary_calibration(self, scores: np.ndarray[int], buckets=10):
-        """
-        Calibration score (ECE) for binary classification
-        Within each bucket, find the actual success rate and compare it with the predicted probabilities
-        """
-        masked_feature_matrix = self.get_masked_feature_tensor().flatten()
-        masked_interaction_matrix = ~np.isclose(masked_feature_matrix, 0)
-        n = len(masked_feature_matrix)
-        ct_positive = np.sum(masked_interaction_matrix)
+    def masked_calibrate(self, predicted_probabilities, labels, lo=0, hi=1, buckets=10):
+        mask = (predicted_probabilities >= lo) & (predicted_probabilities < hi)
+        predicted_probabilities = predicted_probabilities[mask]
+        labels = labels[mask]
 
-        predicted_probabilities = np.array(scores.flatten())
-        assert len(predicted_probabilities) == n == len(masked_interaction_matrix)
-        if self.sigmoid_scores:
-            predicted_probabilities = 1 / (1 + np.exp(-predicted_probabilities))
-
-        # print(f"Binary Calibration: {n=} {ct_positive=}")
-        # print(np.min(predicted_probabilities), np.max(predicted_probabilities))
-
-        bucket_idx = np.floor(predicted_probabilities * buckets).astype(np.int32)
+        bucket_idx = np.clip(
+            np.floor((predicted_probabilities - lo) / (hi - lo)),
+            0,
+            self.calibration_buckets - 1,
+        ).astype(np.int32)
         bucket_frequencies = np.zeros((buckets,))
         bucket_bincounts = np.bincount(bucket_idx)
         for i in range(len(bucket_bincounts)):
             bucket_frequencies[i] = bucket_bincounts[i]
         bucket_n_success = np.array(
-            [sum(masked_interaction_matrix[bucket_idx == i]) for i in range(buckets)]
+            [np.sum(labels[bucket_idx == i]) for i in range(buckets)]
         )
-        bucket_accuracies = np.where(
-            bucket_frequencies == 0, 0, bucket_n_success / bucket_frequencies
-        )
+        bucket_accuracies = bucket_n_success / np.clip(bucket_frequencies, 1, None)
         bucket_average_probabilities = np.array(
             [
                 (
@@ -245,21 +236,66 @@ class TestBench:
                 for i in range(buckets)
             ]
         )
-        assert np.sum(bucket_frequencies) == n
-        assert np.sum(bucket_n_success) == ct_positive
-        ece = (
-            np.sum(
-                bucket_frequencies
-                * np.abs(bucket_accuracies - bucket_average_probabilities)
-            )
-            / n
-        )
+        ece = np.sum(
+            bucket_frequencies
+            * np.abs(bucket_accuracies - bucket_average_probabilities)
+        ) / np.sum(bucket_frequencies)
         return {
             "ece": ece,
-            "bucket_frequencies": bucket_frequencies,
-            "bucket_accuracies": bucket_accuracies,
-            "bucket_average_probabilities": bucket_average_probabilities,
+            "bucket_frequencies": bucket_frequencies.tolist(),
+            "bucket_accuracies": bucket_accuracies.tolist(),
+            "bucket_average_probabilities": bucket_average_probabilities.tolist(),
         }
+
+    def binary_calibration(self, scores: np.ndarray[int], buckets=10):
+        """
+        Calibration score (ECE) for binary classification
+        Within each bucket, find the actual success rate and compare it with the predicted probabilities
+        """
+        masked_feature_matrix = self.get_masked_feature_tensor().flatten()
+        masked_interaction_matrix = ~np.isclose(masked_feature_matrix, 0)
+        n = len(masked_feature_matrix)
+
+        predicted_probabilities = np.array(scores.flatten())
+        assert len(predicted_probabilities) == n == len(masked_interaction_matrix)
+        if self.sigmoid_scores:
+            non_neg_case = 1 / (1 + np.exp(-predicted_probabilities))
+            exp_scores = np.exp(predicted_probabilities)
+            neg_case = exp_scores / (1 + exp_scores)
+            predicted_probabilities = np.where(
+                predicted_probabilities >= 0, non_neg_case, neg_case
+            )
+
+        whole_calibration = self.masked_calibrate(
+            predicted_probabilities,
+            masked_interaction_matrix,
+            buckets=buckets,
+            lo=0,
+            hi=1 + 1e-8,
+        )
+
+        if self.calibration_breakpoints:
+            piecewise_calibration_breakpoints = (
+                [0] + self.calibration_breakpoints + [1 + 1e-8]
+            )
+            piecewise_calibration_results = []
+            for lo, hi in zip(
+                piecewise_calibration_breakpoints, piecewise_calibration_breakpoints[1:]
+            ):
+                calibration = self.masked_calibrate(
+                    predicted_probabilities,
+                    masked_interaction_matrix,
+                    buckets=buckets,
+                    lo=lo,
+                    hi=hi,
+                )
+                calibration = calibration | {"lo": lo, "hi": hi}
+                piecewise_calibration_results.append(calibration)
+
+        ret = {"whole_calibration": whole_calibration}
+        if self.calibration_breakpoints:
+            ret["piecewise_calibration"] = piecewise_calibration_results
+        return ret
 
     def end_eval_test_set(
         self, scores: np.ndarray[int], k_recommended_shows: np.ndarray[int]
@@ -282,35 +318,52 @@ class TestBench:
             k_recommended_shows
         )
         pseudo_iou = self.pseudo_iou(k_recommended_shows)
-        calibration_scores = self.binary_calibration(scores, self.calibration_buckets)
+        calibration_object = self.binary_calibration(scores, self.calibration_buckets)
 
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {ndcg_score:0.4f}.")
         print(f"Your DEI score is {diversity_score:0.4f}.")
         print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
-        print(f"Your calibration score is {calibration_scores['ece']:0.4f}.")
-        calibration_breakdown = list(
-            zip(
-                calibration_scores["bucket_frequencies"],
-                calibration_scores["bucket_accuracies"],
-                calibration_scores["bucket_average_probabilities"],
-            )
+
+        calibration_scores, piecewise_scores = {}, {}
+        if "whole_calibration" in calibration_object:
+            calibration_scores = calibration_object["whole_calibration"]
+            ece = calibration_scores["ece"]
+            print(f"Your whole calibration score is {ece:0.4f}.")
+            calibration_scores = {"calibration_scores": calibration_scores}
+        if "piecewise_calibration" in calibration_object:
+            piecewise_scores = calibration_object["piecewise_calibration"]
+            for score_obj in piecewise_scores:
+                lo, hi = score_obj["lo"], score_obj["hi"]
+                ece = score_obj["ece"]
+                print(f"Your piecewise calibration score ({lo=},{hi=}) is {ece:0.4f}.")
+            piecewise_scores = {"piecewise_scores": piecewise_scores}
+        # calibration_breakdown = list(
+        #     zip(
+        #         calibration_scores["bucket_frequencies"],
+        #         calibration_scores["bucket_accuracies"],
+        #         calibration_scores["bucket_average_probabilities"],
+        #     )
+        # )
+        # print(f"Your calibration breakdown: ")
+        # title_a, title_b, title_c = (
+        #     "Bucket Frequency",
+        #     "Bucket Accuracy",
+        #     "Bucket Average Probability",
+        # )
+        # print(f"{title_a:<20s}|{title_b:<20s}|{title_c:<20s}")
+        # for a, b, c in calibration_breakdown:
+        #     print(f"{a:^20.2f}|{b:^20.4f}|{c:^20.4f}")
+        return (
+            {
+                "runtime": total_runtime,
+                "ndcg": ndcg_score,
+                "diversity_score": diversity_score,
+                "pseudo_iou": pseudo_iou,
+            }
+            | calibration_scores
+            | piecewise_scores
         )
-        print(f"Your calibration breakdown: ")
-        title_a, title_b, title_c = (
-            "Bucket Frequency",
-            "Bucket Accuracy",
-            "Bucket Average Probability",
-        )
-        print(f"{title_a:<20s}|{title_b:<20s}|{title_c:<20s}")
-        for a, b, c in calibration_breakdown:
-            print(f"{a:^20.2f}|{b:^20.4f}|{c:^20.4f}")
-        return {
-            "runtime": total_runtime,
-            "ndcg": ndcg_score,
-            "diversity_score": diversity_score,
-            "pseudo_iou": pseudo_iou,
-        } | calibration_scores
 
     def full_evaluation(self, recommender: GenericRecommender, return_scores=False):
         preserved_features, k = self.start_eval_test_set()
