@@ -221,9 +221,10 @@ class TowerRecommender(GenericRecommender):
                 f"[{epoch}] Loss: {epoch_loss:0.4f}. Time: {elapsed_time:0.2f} s / {estimated_time:0.2f} s. ETA: {estimated_remainder:0.2f} s"
             )
             metrics = self.testbench.full_evaluation(self, return_scores=False)
-            print(f">>{epoch}|{loss}|{json.dumps(metrics, indent=None)}<<")
+            log_message = f">>{epoch}|{loss}|\n{json.dumps(metrics, indent=2)}<<"
+            print(log_message)
             with open(f"{self.save_to}.log", "a") as f:
-                f.write(f">>{epoch}|{loss}|{json.dumps(metrics, indent=None)}<<\n")
+                f.write(f"{log_message}\n")
 
         if self.save_model and self.save_to:
             print(f"Saving model to {self.save_to}")

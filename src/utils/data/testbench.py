@@ -214,7 +214,9 @@ class TestBench:
         labels = labels[mask]
 
         bucket_idx = np.clip(
-            np.floor((predicted_probabilities - lo) / (hi - lo)),
+            np.floor(
+                (predicted_probabilities - lo) / (hi - lo) * self.calibration_buckets
+            ),
             0,
             self.calibration_buckets - 1,
         ).astype(np.int32)
