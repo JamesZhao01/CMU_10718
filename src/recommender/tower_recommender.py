@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.utils.data as data
+import torchvision
 import tqdm
 import os
 import json
@@ -56,7 +57,9 @@ class TowerRecommender(GenericRecommender):
         temperature: float = 1,
         n_pos: int = 10,
         n_neg: int = 10,
-        loss="bce",  # bce, info_nce, contrastive
+        loss="bce",  # bce, info_nce, contrastive, focal
+        focal_gamma=1,
+        focal_alpha=1,
         sim="cosine",  # cosine, dot
         scoring_modification=["none", {}],
         lr=1e-3,
@@ -85,6 +88,8 @@ class TowerRecommender(GenericRecommender):
         self.n_pos = n_pos
         self.n_neg = n_neg
         self.loss = loss
+        self.focal_gamma = focal_gamma
+        self.focal_alpha = focal_alpha
         self.sim = sim
         self.scoring_modification_type = scoring_modification[0]
         self.scoring_modification_parameters = scoring_modification[1]
@@ -106,6 +111,8 @@ class TowerRecommender(GenericRecommender):
                     "n_pos": n_pos,
                     "n_neg": n_neg,
                     "loss": loss,
+                    "focal_alpha": focal_alpha,
+                    "focal_gamma": focal_gamma,
                     "sim": sim,
                     "lr": lr,
                     "epochs": epochs,
@@ -125,6 +132,8 @@ class TowerRecommender(GenericRecommender):
             item_embedders_spec=item_embedder,
             temperature=temperature,
             loss=loss,
+            alpha=focal_alpha,
+            gamma=focal_gamma,
             sim=sim,
         ).to(self.device)
         self.testbench = TestBench(
@@ -437,6 +446,8 @@ class TowerModel(nn.Module):
         item_embedders_spec: List[Tuple[str, dict]],
         temperature: float = 1,
         loss: Literal["bce", "contrastive", "info_nce"] = "bce",
+        alpha: float = 1,
+        gamma: float = 1,
         sim: Literal["cosine", "dot"] = "cosine",
     ):
         super().__init__()
@@ -445,6 +456,8 @@ class TowerModel(nn.Module):
         self.embedding_dimension = embedding_dimension
         self.temperature = temperature
         self.loss = loss
+        self.alpha = alpha
+        self.gamma = gamma
         self.sim = sim
 
         user_embedders, item_embedders = build_all_embedders(
@@ -551,6 +564,22 @@ class TowerModel(nn.Module):
             sum_terms = terms.sum(dim=1)
             loss = sum_terms.mean()
 
+            return {
+                "loss": loss,
+                "positive_term": positive_sim.mean().item(),
+                "negative_term": negative_sim.mean().item(),
+            }
+
+        # Focal loss
+        if self.loss == "focal":
+            data = torch.cat([positive_sim, negative_sim], dim=1)
+            labels = torch.cat(
+                [torch.ones_like(positive_sim), torch.zeros_like(negative_sim)],
+                dim=1,
+            ).to(user_embedding.device)
+            loss = torchvision.ops.focal_loss.sigmoid_focal_loss(
+                data, labels, alpha=self.alpha, gamma=self.gamma, reduction="mean"
+            )
             return {
                 "loss": loss,
                 "positive_term": positive_sim.mean().item(),
