@@ -57,9 +57,10 @@ class TowerRecommender(GenericRecommender):
         temperature: float = 1,
         n_pos: int = 10,
         n_neg: int = 10,
-        loss="bce",  # bce, info_nce, contrastive, focal
+        loss="bce",  # bce, info_nce, contrastive, focal, brier
         focal_gamma=1,
         focal_alpha=1,
+        brier_beta=0.5,  # weight of beta * bce_loss + (1-beta) * brier_loss
         sim="cosine",  # cosine, dot
         scoring_modification=["none", {}],
         lr=1e-3,
@@ -90,6 +91,7 @@ class TowerRecommender(GenericRecommender):
         self.loss = loss
         self.focal_gamma = focal_gamma
         self.focal_alpha = focal_alpha
+        self.brier_beta = brier_beta
         self.sim = sim
         self.scoring_modification_type = scoring_modification[0]
         self.scoring_modification_parameters = scoring_modification[1]
@@ -113,6 +115,7 @@ class TowerRecommender(GenericRecommender):
                     "loss": loss,
                     "focal_alpha": focal_alpha,
                     "focal_gamma": focal_gamma,
+                    "brier_beta": brier_beta,
                     "sim": sim,
                     "lr": lr,
                     "epochs": epochs,
@@ -134,6 +137,7 @@ class TowerRecommender(GenericRecommender):
             loss=loss,
             alpha=focal_alpha,
             gamma=focal_gamma,
+            beta=brier_beta,
             sim=sim,
         ).to(self.device)
         self.testbench = TestBench(
@@ -448,6 +452,7 @@ class TowerModel(nn.Module):
         loss: Literal["bce", "contrastive", "info_nce"] = "bce",
         alpha: float = 1,
         gamma: float = 1,
+        beta: float = 0.5,
         sim: Literal["cosine", "dot"] = "cosine",
     ):
         super().__init__()
@@ -458,6 +463,7 @@ class TowerModel(nn.Module):
         self.loss = loss
         self.alpha = alpha
         self.gamma = gamma
+        self.beta = beta
         self.sim = sim
 
         user_embedders, item_embedders = build_all_embedders(
@@ -580,6 +586,25 @@ class TowerModel(nn.Module):
             loss = torchvision.ops.focal_loss.sigmoid_focal_loss(
                 data, labels, alpha=self.alpha, gamma=self.gamma, reduction="mean"
             )
+            return {
+                "loss": loss,
+                "positive_term": positive_sim.mean().item(),
+                "negative_term": negative_sim.mean().item(),
+            }
+
+            # BCE
+        if self.loss == "brier":
+            data = torch.cat([positive_sim, negative_sim], dim=1)
+            labels = torch.cat(
+                [torch.ones_like(positive_sim), torch.zeros_like(negative_sim)],
+                dim=1,
+            ).to(user_embedding.device)
+            bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                data, labels
+            )
+            brier_loss = torch.mean((torch.sigmoid(data) - labels) ** 2)
+            loss = self.beta * bce_loss + (1 - self.beta) * brier_loss
+
             return {
                 "loss": loss,
                 "positive_term": positive_sim.mean().item(),
