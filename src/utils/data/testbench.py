@@ -43,8 +43,8 @@ class TestBench:
         datamodule: DataModule,
         should_return_ids: bool = False,
         calibration_buckets=10,
-        calibration_breakpoints=None,
-        sigmoid_scores=False,
+        calibration_breakpoints=[0.1, 0.5, 0.9],
+        sigmoid_scores=True,
         **kwargs,
     ):
         self.datamodule = datamodule
@@ -208,8 +208,15 @@ class TestBench:
         score = total_num / total_posssible
         return score
 
-    def masked_calibrate(self, predicted_probabilities, labels, lo=0, hi=1, buckets=10):
-        mask = (predicted_probabilities >= lo) & (predicted_probabilities < hi)
+    def masked_calibrate(
+        self, predicted_probabilities, labels, lo=0, hi=1, buckets=10, custom_mask=None
+    ):
+        if lo is not None and hi is not None and custom_mask is None:
+            mask = (predicted_probabilities >= lo) & (predicted_probabilities < hi)
+        elif custom_mask is not None:
+            mask = custom_mask
+        else:
+            raise ValueError("Invalid mask configuration")
         predicted_probabilities = predicted_probabilities[mask]
         labels = labels[mask]
 
@@ -268,6 +275,7 @@ class TestBench:
                 predicted_probabilities >= 0, non_neg_case, neg_case
             )
 
+        # base calibration
         whole_calibration = self.masked_calibrate(
             predicted_probabilities,
             masked_interaction_matrix,
@@ -276,6 +284,15 @@ class TestBench:
             hi=1 + 1e-8,
         )
 
+        # positive calibration
+        positive_calibration = self.masked_calibrate(
+            predicted_probabilities,
+            masked_interaction_matrix,
+            buckets=buckets,
+            custom_mask=masked_interaction_matrix,
+        )
+
+        # piecewise calibration
         if self.calibration_breakpoints:
             piecewise_calibration_breakpoints = (
                 [0] + self.calibration_breakpoints + [1 + 1e-8]
@@ -294,7 +311,10 @@ class TestBench:
                 calibration = calibration | {"lo": lo, "hi": hi}
                 piecewise_calibration_results.append(calibration)
 
-        ret = {"whole_calibration": whole_calibration}
+        ret = {
+            "whole_calibration": whole_calibration,
+            "positive_calibration": positive_calibration,
+        }
         if self.calibration_breakpoints:
             ret["piecewise_calibration"] = piecewise_calibration_results
         return ret
@@ -327,7 +347,7 @@ class TestBench:
         print(f"Your DEI score is {diversity_score:0.4f}.")
         print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
 
-        calibration_scores, piecewise_scores = {}, {}
+        calibration_scores, piecewise_scores, positive_scores = {}, {}, {}
         if "whole_calibration" in calibration_object:
             calibration_scores = calibration_object["whole_calibration"]
             ece = calibration_scores["ece"]
@@ -340,6 +360,11 @@ class TestBench:
                 ece = score_obj["ece"]
                 print(f"Your piecewise calibration score ({lo=},{hi=}) is {ece:0.4f}.")
             piecewise_scores = {"piecewise_scores": piecewise_scores}
+        if "positive_calibration" in calibration_object:
+            positive_scores = calibration_object["positive_calibration"]
+            ece = positive_scores["ece"]
+            print(f"Your positive calibration score is {ece:0.4f}.")
+            positive_scores = {"positive_scores": positive_scores}
         # calibration_breakdown = list(
         #     zip(
         #         calibration_scores["bucket_frequencies"],
@@ -365,6 +390,7 @@ class TestBench:
             }
             | calibration_scores
             | piecewise_scores
+            | positive_scores
         )
 
     def full_evaluation(self, recommender: GenericRecommender, return_scores=False):

@@ -1,5 +1,5 @@
-$target = "a4_temperature";
-$run1 = "base_512_temperature";
+$target = "a4_focal";
+$run1 = "base_512_focal";
 $env:PYTHONPATH="src"; 
 
 # Run from workspace directory (CMU_10718)
@@ -13,5 +13,4 @@ python "./src/recommender/sweep_pipeline.py" `
     --force_retrain `
     --num_chunks 1 `
     --chunk_idx 0 `
-    --do_train `
     --do_test 

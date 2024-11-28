@@ -161,11 +161,12 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-/data
-/models
+data/
+models/**/*.*
 
 *.zip
 *.png
 *.log
-*.sh
 *.zip
+
+!models/**/*.metrics.log

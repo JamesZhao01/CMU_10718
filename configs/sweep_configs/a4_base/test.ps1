@@ -15,7 +15,6 @@ python "./src/recommender/sweep_pipeline.py" `
     --force_retrain `
     --num_chunks 1 `
     --chunk_idx 0 `
-    --do_train `
     --do_test &&
 
 python "./src/recommender/sweep_pipeline.py" `
@@ -27,7 +26,6 @@ python "./src/recommender/sweep_pipeline.py" `
     --force_retrain `
     --num_chunks 1 `
     --chunk_idx 0 `
-    --do_train `
     --do_test &&
 
 python "./src/recommender/sweep_pipeline.py" `
@@ -39,5 +37,4 @@ python "./src/recommender/sweep_pipeline.py" `
     --force_retrain `
     --num_chunks 1 `
     --chunk_idx 0 `
-    --do_train `
     --do_test

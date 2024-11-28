@@ -12,4 +12,6 @@ python "./src/recommender/sweep_pipeline.py" `
     --output_dir "models/sweep/${target}/${run1}" `
     --force_retrain `
     --num_chunks 1 `
-    --chunk_idx 0
+    --chunk_idx 0 `
+    --do_train `
+    --do_test 

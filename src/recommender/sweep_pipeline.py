@@ -35,6 +35,8 @@ def sweep(
     num_chunks: int,
     chunk_idx: int,
     force_retrain: bool,
+    do_train: bool,
+    do_test: bool,
 ):
     keys = list(sweep_config.keys())
     values = list(sweep_config.values())
@@ -81,8 +83,29 @@ def sweep(
             f.write(
                 f"{inner_preface} Config {json.dumps(sweep_config_i, indent=None)}\n"
             )
-        model = Models.from_string(model_type)(datamodule=datamodule, **full_config)
-        model.train()
+
+        if do_train:
+            print(f"{inner_preface} Training")
+            model = Models.from_string(model_type)(datamodule=datamodule, **full_config)
+            model.train()
+        else:
+            if do_test and os.path.exists(save_to):
+                print(f"{inner_preface} Skipping training, loading {save_to}")
+                full_config = full_config | {"load_from": save_to}
+                model = Models.from_string(model_type)(
+                    datamodule=datamodule, **full_config
+                )
+            elif not do_test:
+                print(f"{inner_preface} Warn: Skipping training and testing ...?")
+                continue
+            else:
+                print(f"{inner_preface} Error: No checkpoint to load {save_to}")
+                continue
+        if do_test:
+            testbench = TestBench(datamodule, should_return_ids=True)
+            metrics = testbench.full_evaluation(model, return_scores=False)
+            with open(save_to + ".metrics.log", "w") as f:
+                f.write(json.dumps(metrics, indent=2))
 
 
 def main(args: dict):
@@ -111,6 +134,8 @@ def main(args: dict):
     num_chunks = args["num_chunks"]
     chunk_idx = args["chunk_idx"]
     force_retrain = args["force_retrain"]
+    do_train = args["do_train"]
+    do_test = args["do_test"]
     assert num_chunks > 0
     assert chunk_idx >= 0 and chunk_idx < num_chunks
     sweep(
@@ -122,6 +147,8 @@ def main(args: dict):
         num_chunks=num_chunks,
         chunk_idx=chunk_idx,
         force_retrain=force_retrain,
+        do_train=do_train,
+        do_test=do_test,
     )
 
 
@@ -133,6 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_chunks", type=int, required=True)
     parser.add_argument("--chunk_idx", type=int, required=True)
     parser.add_argument("--force_retrain", action="store_true")
+    parser.add_argument("--do_train", action="store_true")
+    parser.add_argument("--do_test", action="store_true")
 
     parser.add_argument(
         "--model", type=str, default="TOWER", choices=[val.name for val in Models]
