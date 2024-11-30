@@ -61,7 +61,8 @@ def sweep(
         save_to = os.path.join(output_dir, f"model_{i}.pt")
         os.makedirs(output_dir, exist_ok=True)
         log_file = save_to + ".log"
-        full_config = full_config | {"save_to": save_to}
+        if do_train:
+            full_config = full_config | {"save_to": save_to}
         inner_preface = f"{preface} {i=}"
 
         if os.path.exists(log_file):

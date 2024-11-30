@@ -17,6 +17,7 @@ class UserEmbedders(Enum):
 class ItemEmbedders(Enum):
     ID_EMBEDDING = "id_embedding"
     TITLE_PRETRAINED_EMBEDDING = "title_pretrained_embedding"
+    SYNOPSIS_PRETRAINED_EMBEDDING = "synopsis_pretrained_embedding"
 
 
 def collate_item_feature(
@@ -30,8 +31,10 @@ def collate_item_feature(
                 assembled_feature = torch.stack(feature, dim=0)
             case ItemEmbedders.TITLE_PRETRAINED_EMBEDDING.value:
                 assembled_feature = torch.stack(feature, dim=0)
+            case ItemEmbedders.SYNOPSIS_PRETRAINED_EMBEDDING.value:
+                assembled_feature = torch.stack(feature, dim=0)
             case _:
-                raise NotImplementedError(f"Unrecognized feature {item_embedder}")
+                raise NotImplementedError(f"Unrecognized feature {feature_name}")
         collated_features.append(assembled_feature)
     return collated_features
 
@@ -117,6 +120,18 @@ def featurize_item_or_items(
                     for anime in animes
                 ]
             )
+        case ItemEmbedders.SYNOPSIS_PRETRAINED_EMBEDDING.value:
+            assert (
+                "npy_synopsis_pretrained_embedding" in auxiliary_data
+            ), "Synopsis embeddings not found in auxiliary data"
+            return torch.vstack(
+                [
+                    torch.from_numpy(
+                        auxiliary_data["npy_synopsis_pretrained_embedding"][anime.id]
+                    )
+                    for anime in animes
+                ]
+            )
         case _:
             raise NotImplementedError(f"Unrecognized feature {feature_name}")
 
@@ -187,6 +202,9 @@ def build_all_embedders(
                     n_anime, embedder_metadata["embedding_dimension"]
                 )
             case ItemEmbedders.TITLE_PRETRAINED_EMBEDDING.value:
+                assert "model" in embedder_metadata
+                embedder = build_arbitrary_mlp(embedder_metadata["model"])
+            case ItemEmbedders.SYNOPSIS_PRETRAINED_EMBEDDING.value:
                 assert "model" in embedder_metadata
                 embedder = build_arbitrary_mlp(embedder_metadata["model"])
             case _:
