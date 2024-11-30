@@ -1,0 +1,41 @@
+{
+    "embedding_dimension": 256,
+    "user_embedder": [
+        [
+            "user_embedding",
+            {
+                "embedding_dimension": 256
+            }
+        ]
+    ],
+    "item_embedder": [
+        [
+            "id_embedding",
+            {
+                "embedding_dimension": 256
+            }
+        ]
+    ],
+    "temperature": 1,
+    "n_pos": 10,
+    "n_neg": 10,
+    "loss": "bce",
+    "sim": "cosine",
+    "lr": 1e-2,
+    "epochs": 100,
+    "batch_size": 512,
+    "dataset_args": {
+        "shuffle": true
+    },
+    "load_from": "",
+    "save_to": "",
+    "device": "cuda",
+    "save_model": true,
+    "testbench_calibration_buckets": 10,
+    "testbench_sigmoid_scores": true,
+    "testbench_calibration_breakpoints": [
+        0.1,
+        0.5,
+        0.9
+    ]
+}

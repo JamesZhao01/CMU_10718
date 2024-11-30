@@ -1,0 +1,34 @@
+{
+  "embedding_dimension": 256,
+  "user_embedder": [
+    [
+      "user_embedding",
+      {
+        "embedding_dimension": 256
+      }
+    ]
+  ],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 256
+      }
+    ]
+  ],
+  "temperature": 1,
+  "n_pos": 10,
+  "n_neg": 10,
+  "loss": "bce",
+  "sim": "cosine",
+  "lr": 1e-2,
+  "epochs": 20,
+  "batch_size": 512,
+  "dataset_args": {
+    "shuffle": true
+  },
+  "load_from": "",
+  "save_to": "models/twotower/user_id__anime_id_fresh.pt",
+  "use_histories": false,
+  "device": "cuda"
+}

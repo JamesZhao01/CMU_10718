@@ -1,0 +1,42 @@
+{
+  "embedding_dimension": 512,
+  "user_embedder": [
+    [
+      "user_embedding",
+      {
+        "embedding_dimension": 512
+      }
+    ]
+  ],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 256
+      }
+    ],
+    [
+      "title_pretrained_embedding",
+      {
+        "model": [[768, 256], "relu", [256, 256]]
+      }
+    ]
+  ],
+  "temperature": 1,
+  "n_pos": 10,
+  "n_neg": 10,
+  "loss": "bce",
+  "sim": "cosine",
+  "lr": 5e-3,
+  "epochs": 100,
+  "batch_size": 512,
+  "dataset_args": {
+    "shuffle": true
+  },
+  "dataset_wrapper_args": {
+    "npy_title_pretrained_embedding": "data/embeddings/gte-base_titles.npy"
+  },
+  "load_from": "",
+  "save_to": "models/twotower/2_user_id_anime_id_title_fresh.pt",
+  "device": "cuda"
+}

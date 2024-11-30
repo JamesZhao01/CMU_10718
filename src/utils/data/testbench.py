@@ -23,6 +23,7 @@ For Matrix Factorization models, user embeddings will need to be re-trained duri
 For Two-Tower models, models will need to made agnostic to user embeddings
 """
 
+from functools import cache
 import math
 import time
 from datetime import datetime
@@ -37,12 +38,24 @@ from utils.data.data_module import DataModule
 
 
 class TestBench:
-    def __init__(self, data_module: DataModule):
-        self.data_module = data_module
+    def __init__(
+        self,
+        datamodule: DataModule,
+        should_return_ids: bool = False,
+        calibration_buckets=10,
+        calibration_breakpoints=[0.1, 0.5, 0.9],
+        sigmoid_scores=True,
+        **kwargs,
+    ):
+        self.datamodule = datamodule
+        self.should_return_ids = should_return_ids
 
-        self.k = data_module.k
-        self.n_test = len(self.data_module.test_cuids)
-        self.n_anime = self.data_module.max_anime_count
+        self.k = self.datamodule.k
+        self.calibration_buckets = calibration_buckets
+        self.calibration_breakpoints = calibration_breakpoints
+        self.sigmoid_scores = sigmoid_scores
+        self.n_test = len(self.datamodule.test_cuids)
+        self.n_anime = self.datamodule.max_anime_count
 
     def batch_iterator(self, data, batch_size: int):
         n = len(data)
@@ -56,15 +69,14 @@ class TestBench:
             np.ndarray[float]: _description_
         """
         preserved_histories = [
-            self.data_module.canonical_user_mapping[cuid].get_preserved_features()
-            for cuid in tqdm.tqdm(
-                self.data_module.test_cuids, desc="Preserved Features"
-            )
+            self.datamodule.canonical_user_mapping[cuid].get_preserved_features()
+            for cuid in tqdm.tqdm(self.datamodule.test_cuids, desc="Preserved Features")
         ]
         arr = np.vstack(preserved_histories)
         assert arr.shape == (self.n_test, self.n_anime)
         return arr
 
+    @cache
     def get_masked_feature_tensor(self) -> np.ndarray[float]:
         """_summary_
 
@@ -72,10 +84,10 @@ class TestBench:
             np.ndarray[float]: _description_
         """
         masked_features = [
-            self.data_module.canonical_user_mapping[cuid].get_masked_features(
+            self.datamodule.canonical_user_mapping[cuid].get_masked_features(
                 imputed=True
             )
-            for cuid in self.data_module.test_cuids
+            for cuid in self.datamodule.test_cuids
         ]
         arr = np.vstack(masked_features)
         assert arr.shape == (self.n_test, self.n_anime)
@@ -83,8 +95,8 @@ class TestBench:
 
     def get_masked_top_k_tensor(self) -> np.ndarray[int]:
         k_predictions = np.zeros((self.n_test, self.k), dtype=int)
-        for cuid in self.data_module.test_cuids:
-            user = self.data_module.canonical_user_mapping[id]
+        for cuid in self.datamodule.test_cuids:
+            user = self.datamodule.canonical_user_mapping[id]
             ground_truth_of_masked_history = user.get_masked_features(imputed=True)
             ids = np.nonzero(ground_truth_of_masked_history)[0]
             ratings = ground_truth_of_masked_history[ids]
@@ -100,13 +112,37 @@ class TestBench:
         Returns:
         - user_preserved_watch_history: Masked user watch history of shape [num_of_users, MAX_ANIME_COUNT]
         - k: number of anime recommendations your model should present
+
+        Can also return (list[User], [(list[Anime], ratings_ndarray)..]) if should_return_ids is True
         """
 
-        user_preserved_watch_history = self.get_preserved_feature_tensor()
+        if not self.should_return_ids:
+            user_preserved_watch_history = self.get_preserved_feature_tensor()
+            to_return = user_preserved_watch_history
+        else:
+            users = [
+                self.datamodule.canonical_user_mapping[test_cuid]
+                for test_cuid in self.datamodule.test_cuids
+            ]
+            user_histories = [
+                (
+                    [
+                        self.datamodule.canonical_anime_mapping[caid]
+                        for caid in self.datamodule.canonical_user_mapping[
+                            test_cuid
+                        ].preserved_cais
+                    ],
+                    self.datamodule.canonical_user_mapping[test_cuid].rating_history[
+                        self.datamodule.canonical_user_mapping[test_cuid].preserved
+                    ],
+                )
+                for test_cuid in self.datamodule.test_cuids
+            ]
+            to_return = users, user_histories
         self.start_time = time.time()
         str_time = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d %H:%M:%S")
         print(f"Start Time: {str_time}")
-        return user_preserved_watch_history, self.k
+        return to_return, self.k
 
     def calculate_ndcg(self, k_recommended_shows: np.ndarray[int]):
         masked_feature_ground_truth_scores = self.get_masked_feature_tensor()
@@ -119,6 +155,14 @@ class TestBench:
 
         score = ndcg_score(masked_feature_ground_truth_scores, pred, k=self.k)
         return score
+
+    def calculate_r_precision(
+        self, k_recommended_shows: np.ndarray[int], k_truth: np.ndarray[int]
+    ):
+        """
+        What percentage of truth was recommended
+        """
+        pass
 
     def calculate_diversity_by_community_count(
         self, k_recommended_shows: np.ndarray[int]
@@ -137,13 +181,147 @@ class TestBench:
         recommended = set()
         for row_of_watch_history in k_recommended_shows:
             for caid in row_of_watch_history:
-                anime: Anime = self.data_module.canonical_anime_mapping[caid]
+                anime: Anime = self.datamodule.canonical_anime_mapping[caid]
                 if caid not in recommended:
                     total_community_count += math.log(anime.membership_count)
                     recommended.add(caid)
         return total_community_count
 
-    def end_eval_test_set(self, k_recommended_shows: np.ndarray[int]):
+    def pseudo_iou(self, k_recommended_shows: np.ndarray[int]):
+        """
+        Gets the membership/community count of each anime that was recommended and sums
+        them up, ignoring duplicates.
+
+        This prioritizes both popularity and diversity, as popular shows will increase the count,
+        but duplicates will not.
+
+        TODO: Consider functions to downgrade the importance of popularity (log, sqrt)
+        """
+        recommended = set()
+        total_posssible = k_recommended_shows.shape[0] * k_recommended_shows.shape[1]
+        for row_of_watch_history in k_recommended_shows:
+            for id in row_of_watch_history:
+                if id not in recommended:
+                    recommended.add(id)
+        ##count elements in recommended
+        total_num = len(recommended)
+        score = total_num / total_posssible
+        return score
+
+    def masked_calibrate(
+        self, predicted_probabilities, labels, lo=0, hi=1, buckets=10, custom_mask=None
+    ):
+        if lo is not None and hi is not None and custom_mask is None:
+            mask = (predicted_probabilities >= lo) & (predicted_probabilities < hi)
+        elif custom_mask is not None:
+            mask = custom_mask
+        else:
+            raise ValueError("Invalid mask configuration")
+        predicted_probabilities = predicted_probabilities[mask]
+        labels = labels[mask]
+
+        bucket_idx = np.clip(
+            np.floor(
+                (predicted_probabilities - lo) / (hi - lo) * self.calibration_buckets
+            ),
+            0,
+            self.calibration_buckets - 1,
+        ).astype(np.int32)
+        bucket_frequencies = np.zeros((buckets,))
+        bucket_bincounts = np.bincount(bucket_idx)
+        for i in range(len(bucket_bincounts)):
+            bucket_frequencies[i] = bucket_bincounts[i]
+        bucket_n_success = np.array(
+            [np.sum(labels[bucket_idx == i]) for i in range(buckets)]
+        )
+        bucket_accuracies = bucket_n_success / np.clip(bucket_frequencies, 1, None)
+        bucket_average_probabilities = np.array(
+            [
+                (
+                    np.mean(predicted_probabilities[bucket_idx == i])
+                    if bucket_frequencies[i] > 0
+                    else 0
+                )
+                for i in range(buckets)
+            ]
+        )
+        ece = np.sum(
+            bucket_frequencies
+            * np.abs(bucket_accuracies - bucket_average_probabilities)
+        ) / np.sum(bucket_frequencies)
+        return {
+            "ece": ece,
+            "bucket_frequencies": bucket_frequencies.tolist(),
+            "bucket_accuracies": bucket_accuracies.tolist(),
+            "bucket_average_probabilities": bucket_average_probabilities.tolist(),
+        }
+
+    def binary_calibration(self, scores: np.ndarray[int], buckets=10):
+        """
+        Calibration score (ECE) for binary classification
+        Within each bucket, find the actual success rate and compare it with the predicted probabilities
+        """
+        masked_feature_matrix = self.get_masked_feature_tensor().flatten()
+        masked_interaction_matrix = ~np.isclose(masked_feature_matrix, 0)
+        n = len(masked_feature_matrix)
+
+        predicted_probabilities = np.array(scores.flatten())
+        assert len(predicted_probabilities) == n == len(masked_interaction_matrix)
+        if self.sigmoid_scores:
+            non_neg_case = 1 / (1 + np.exp(-predicted_probabilities))
+            exp_scores = np.exp(predicted_probabilities)
+            neg_case = exp_scores / (1 + exp_scores)
+            predicted_probabilities = np.where(
+                predicted_probabilities >= 0, non_neg_case, neg_case
+            )
+
+        # base calibration
+        whole_calibration = self.masked_calibrate(
+            predicted_probabilities,
+            masked_interaction_matrix,
+            buckets=buckets,
+            lo=0,
+            hi=1 + 1e-8,
+        )
+
+        # positive calibration
+        positive_calibration = self.masked_calibrate(
+            predicted_probabilities,
+            masked_interaction_matrix,
+            buckets=buckets,
+            custom_mask=masked_interaction_matrix,
+        )
+
+        # piecewise calibration
+        if self.calibration_breakpoints:
+            piecewise_calibration_breakpoints = (
+                [0] + self.calibration_breakpoints + [1 + 1e-8]
+            )
+            piecewise_calibration_results = []
+            for lo, hi in zip(
+                piecewise_calibration_breakpoints, piecewise_calibration_breakpoints[1:]
+            ):
+                calibration = self.masked_calibrate(
+                    predicted_probabilities,
+                    masked_interaction_matrix,
+                    buckets=buckets,
+                    lo=lo,
+                    hi=hi,
+                )
+                calibration = calibration | {"lo": lo, "hi": hi}
+                piecewise_calibration_results.append(calibration)
+
+        ret = {
+            "whole_calibration": whole_calibration,
+            "positive_calibration": positive_calibration,
+        }
+        if self.calibration_breakpoints:
+            ret["piecewise_calibration"] = piecewise_calibration_results
+        return ret
+
+    def end_eval_test_set(
+        self, scores: np.ndarray[int], k_recommended_shows: np.ndarray[int]
+    ):
         """
         Run this method to end the evaluation program.
         I expect k_recommended_shows to be of shape [test_set_size, k].
@@ -161,25 +339,72 @@ class TestBench:
         diversity_score = self.calculate_diversity_by_community_count(
             k_recommended_shows
         )
+        pseudo_iou = self.pseudo_iou(k_recommended_shows)
+        calibration_object = self.binary_calibration(scores, self.calibration_buckets)
 
         print(f"This model took {total_runtime:0.4f} seconds.")
         print(f"Out of an optimal score of 1.0, you scored {ndcg_score:0.4f}.")
         print(f"Your DEI score is {diversity_score:0.4f}.")
-        return total_runtime, ndcg_score, diversity_score
+        print(f"Your Pseudo-IOU score is {pseudo_iou:0.4f}.")
 
-    def full_evaluation(self, recommender: GenericRecommender):
-        preserved_features, k = self.start_eval_test_set()
-        k_recommended_shows = recommender.infer(preserved_features, k)
-        assert k_recommended_shows.shape == (self.n_test, k)
-        total_runtime, score, diversity_score = self.end_eval_test_set(
-            k_recommended_shows
+        calibration_scores, piecewise_scores, positive_scores = {}, {}, {}
+        if "whole_calibration" in calibration_object:
+            calibration_scores = calibration_object["whole_calibration"]
+            ece = calibration_scores["ece"]
+            print(f"Your whole calibration score is {ece:0.4f}.")
+            calibration_scores = {"calibration_scores": calibration_scores}
+        if "piecewise_calibration" in calibration_object:
+            piecewise_scores = calibration_object["piecewise_calibration"]
+            for score_obj in piecewise_scores:
+                lo, hi = score_obj["lo"], score_obj["hi"]
+                ece = score_obj["ece"]
+                print(f"Your piecewise calibration score ({lo=},{hi=}) is {ece:0.4f}.")
+            piecewise_scores = {"piecewise_scores": piecewise_scores}
+        if "positive_calibration" in calibration_object:
+            positive_scores = calibration_object["positive_calibration"]
+            ece = positive_scores["ece"]
+            print(f"Your positive calibration score is {ece:0.4f}.")
+            positive_scores = {"positive_scores": positive_scores}
+        # calibration_breakdown = list(
+        #     zip(
+        #         calibration_scores["bucket_frequencies"],
+        #         calibration_scores["bucket_accuracies"],
+        #         calibration_scores["bucket_average_probabilities"],
+        #     )
+        # )
+        # print(f"Your calibration breakdown: ")
+        # title_a, title_b, title_c = (
+        #     "Bucket Frequency",
+        #     "Bucket Accuracy",
+        #     "Bucket Average Probability",
+        # )
+        # print(f"{title_a:<20s}|{title_b:<20s}|{title_c:<20s}")
+        # for a, b, c in calibration_breakdown:
+        #     print(f"{a:^20.2f}|{b:^20.4f}|{c:^20.4f}")
+        return (
+            {
+                "runtime": total_runtime,
+                "ndcg": ndcg_score,
+                "diversity_score": diversity_score,
+                "pseudo_iou": pseudo_iou,
+            }
+            | calibration_scores
+            | piecewise_scores
+            | positive_scores
         )
 
-        return {
-            "total_runtime": total_runtime,
-            "score": score,
-            "diversity_score": diversity_score,
-            "k": k,
-            "k_recommended_shows": k_recommended_shows,
-            "preserved_features": preserved_features,
-        }
+    def full_evaluation(self, recommender: GenericRecommender, return_scores=False):
+        preserved_features, k = self.start_eval_test_set()
+        scores, k_recommended_shows = recommender.infer(preserved_features, k)
+        assert k_recommended_shows.shape == (self.n_test, k)
+        results = self.end_eval_test_set(scores, k_recommended_shows)
+        auxiliary_results = (
+            {
+                "k_recommended_shows": k_recommended_shows,
+                "preserved_features": preserved_features,
+                "scores": scores,
+            }
+            if return_scores
+            else {}
+        )
+        return results | auxiliary_results

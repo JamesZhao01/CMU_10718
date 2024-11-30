@@ -1,0 +1,32 @@
+{
+  "embedding_dimension": 64,
+  "user_embedder": [
+    [
+      "user_embedding",
+      {
+        "embedding_dimension": 64
+      }
+    ]
+  ],
+  "item_embedder": [
+    [
+      "id_embedding",
+      {
+        "embedding_dimension": 64
+      }
+    ]
+  ],
+  "temperature": 1,
+  "n_pos": 10,
+  "n_neg": 20,
+  "lr": 1e-3,
+  "epochs": 20,
+  "batch_size": 256,
+  "dataset_args": {
+    "shuffle": true
+  },
+  "load_from": "models/twotower/user_id__anime_id.pt",
+  "save_to": "models/twotower/user_id__anime_id.pt",
+  "use_histories": false,
+  "device": "cuda"
+}

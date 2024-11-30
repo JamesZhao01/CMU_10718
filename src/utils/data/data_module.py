@@ -39,6 +39,7 @@ class DataModule(JSONWizard):
     thresholded_watch_history: int
     normalize_unrated: bool
     verbose: bool
+    masked_is_negative: bool
 
     holdout_type: Literal["user", "interaction"]
     rng: np.random.Generator = field(
@@ -190,6 +191,7 @@ class DataModule(JSONWizard):
                 rating_history=np.array(filtered_rating_history),
                 imputed_history=np.array(imputed_rating_history),
                 k=self.k,
+                masked_is_negative=self.masked_is_negative,
                 max_anime_count=self.max_anime_count,
                 lazy_store=True,
             )
@@ -206,7 +208,12 @@ class DataModule(JSONWizard):
         if self.holdout_type == "user":
             pass
         elif self.holdout_type == "interaction":
-            for cuid in tqdm.tqdm(self.train_cuids, desc="Resetting Train to k=0 ..."):
+            resetting_iterator = self.train_cuids
+            if self.verbose:
+                resetting_iterator = tqdm.tqdm(
+                    resetting_iterator, desc="Resetting Train to k=0 ..."
+                )
+            for cuid in resetting_iterator:
                 user = self.canonical_user_mapping[cuid]
                 user.k = 0
                 user.reshuffle()

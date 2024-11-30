@@ -157,6 +157,7 @@ class User(JSONWizard):
     cuid: int
     k: int
     max_anime_count: int
+    masked_is_negative: bool
     watch_history: np.ndarray[int] = make_ndarray_field()
     rating_history: np.ndarray[float] = make_ndarray_field()
     imputed_history: np.ndarray[float] = make_ndarray_field()
@@ -164,6 +165,7 @@ class User(JSONWizard):
         default=None, metadata={"dataclass_wizard": {"exclude": True}}
     )
     lazy_store: bool = False
+    
 
     mask: np.ndarray[int] | None = make_optional_ndarray_field()
     preserved: np.ndarray[int] | None = make_optional_ndarray_field()
@@ -195,13 +197,18 @@ class User(JSONWizard):
         permutation = self.rng.permutation(len(self.watch_history))
         self.mask = permutation[: self.k]
         self.preserved = permutation[self.k :]
-        self.negative_cais = np.setdiff1d(
-            np.arange(self.max_anime_count), self.watch_history, assume_unique=True
-        )
 
         # Subsample both arrays using the selected indices
         self.masked_cais = self.watch_history[self.mask]
         self.preserved_cais = self.watch_history[self.preserved]
+        if self.masked_is_negative:
+            self.negative_cais = np.setdiff1d(
+                np.arange(self.max_anime_count), self.preserved_cais
+            )
+        else:
+            self.negative_cais = np.setdiff1d(
+                np.arange(self.max_anime_count), self.watch_history
+            )
 
         # Generate feature vectors (each of size self.max_anime_count)
         if not self.lazy_store:

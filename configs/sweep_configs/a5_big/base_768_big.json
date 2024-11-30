@@ -1,0 +1,77 @@
+{
+    "embedding_dimension": 768,
+    "user_embedder": [
+        [
+            "user_embedding",
+            {
+                "embedding_dimension": 768
+            }
+        ]
+    ],
+    "item_embedder": [
+        [
+            "id_embedding",
+            {
+                "embedding_dimension": 512
+            }
+        ],
+        [
+            "title_pretrained_embedding",
+            {
+                "model": [
+                    [
+                        768,
+                        128
+                    ],
+                    "relu",
+                    [
+                        128,
+                        128
+                    ]
+                ]
+            }
+        ],
+        [
+            "synopsis_pretrained_embedding",
+            {
+                "model": [
+                    [
+                        768,
+                        128
+                    ],
+                    "relu",
+                    [
+                        128,
+                        128
+                    ]
+                ]
+            }
+        ]
+    ],
+    "temperature": 1,
+    "n_pos": 10,
+    "n_neg": 200,
+    "loss": "bce",
+    "brier_beta": 0.25,
+    "sim": "cosine",
+    "lr": 1e-2,
+    "epochs": 100,
+    "batch_size": 512,
+    "dataset_args": {
+        "shuffle": true
+    },
+    "dataset_wrapper_args": {
+        "npy_title_pretrained_embedding": "data/embeddings/gte-base_titles.npy",
+        "npy_synopsis_pretrained_embedding": "data/embeddings/synopses_embeddings.npy"
+    },
+    "load_from": "",
+    "save_to": "models/a5_big/base_768_big.pt",
+    "device": "cuda",
+    "testbench_calibration_buckets": 10,
+    "testbench_sigmoid_scores": true,
+    "testbench_calibration_breakpoints": [
+        0.1,
+        0.5,
+        0.9
+    ]
+}

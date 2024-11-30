@@ -74,4 +74,4 @@ class JaccardRecommender(GenericRecommender):
         scores = np.where(ratings_mask, -float("inf"), scores)
         order = np.argsort(-scores, axis=0)
         results = order[:k].T  # (k, t) -> (t, k)
-        return results
+        return scores, results
